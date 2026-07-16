@@ -1,0 +1,61 @@
+# Ban-safety configuration (FR-145) — HOT-RELOADABLE.
+#
+# This file is the authoritative source for warmup schedules and per-use-case
+# rate limits at runtime. Edit it and reload WITHOUT restarting the fleet:
+#   - POST /v1/admin/reload-safety   (portable; any platform)
+#   - kill -HUP <gateway_pid>        (POSIX only)
+# If this file is absent or invalid, the fleet falls back to the code defaults in
+# app/core/safety_defaults.py (identical to the values below).
+#
+# Warmup: per-tier `days` are the DURATION spent in that tier; the per-use-case
+# total equals their sum (data-model §9 / FR-110):
+#   reactions 7 · join_groups 14 · cold_dm 30 · inviting 45.
+# Tier advancement uses the CUMULATIVE day budget, so `fresh` accounts emit zero
+# cold messages until they reach `ready`.
+
+warmup_schedules:
+  reactions:
+    total_days: 7
+    tiers:
+      fresh:        {days: 1, actions: [profile_setup, subscribe_channels, read]}
+      basic:        {days: 2, actions: [react, read, subscribe_channels]}
+      intermediate: {days: 2, actions: [react, forward, read]}
+      ready:        {days: 2, actions: [react, send_message]}
+  join_groups:
+    total_days: 14
+    tiers:
+      fresh:        {days: 2, actions: [profile_setup, read]}
+      basic:        {days: 4, actions: [react, read, subscribe_channels]}
+      intermediate: {days: 4, actions: [join_group, react, read]}
+      ready:        {days: 4, actions: [join_group, send_message]}
+  cold_dm:
+    total_days: 30
+    tiers:
+      fresh:        {days: 5, actions: [profile_setup, read, subscribe_channels]}
+      basic:        {days: 8, actions: [react, read, cross_message_reply]}
+      intermediate: {days: 10, actions: [cross_message_reply, react, read]}
+      ready:        {days: 7, actions: [send_message, react]}
+  inviting:
+    total_days: 45
+    tiers:
+      fresh:        {days: 7, actions: [profile_setup, read, subscribe_channels]}
+      basic:        {days: 12, actions: [react, cross_message_reply, read]}
+      intermediate: {days: 14, actions: [join_group, react, cross_message_reply]}
+      ready:        {days: 12, actions: [invite_to_group, send_message]}
+
+# Per-use-case daily caps (research R5 / KB-derived; tune per cohort).
+# 0 == the action is not part of that use-case's normal behaviour.
+rate_limits:
+  reactions:   {reactions_per_day: 50, messages_per_day: 0,  joins_per_day: 0, invites_per_day: 0,  resolves_per_day: 100}
+  join_groups: {reactions_per_day: 30, messages_per_day: 0,  joins_per_day: 5, invites_per_day: 0,  resolves_per_day: 100}
+  cold_dm:     {reactions_per_day: 30, messages_per_day: 20, joins_per_day: 0, invites_per_day: 0,  resolves_per_day: 100}
+  inviting:    {reactions_per_day: 30, messages_per_day: 10, joins_per_day: 3, invites_per_day: 20, resolves_per_day: 100}
+
+# Per-account daily caps for READ-only research actions (docs/research-agent-actions.md §4.1).
+# Warmup-exempt (no behavioural footprint) but budgeted so a bursty enrichment/monitoring
+# run can't flood the fleet. get_chat_history is heaviest -> smallest budget.
+read_limits:
+  resolve_username: 100
+  get_chat_info: 200
+  get_chat_history: 80
+  search_public_chat: 50

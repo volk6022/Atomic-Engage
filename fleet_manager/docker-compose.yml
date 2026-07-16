@@ -1,0 +1,131 @@
+version: "3.8"
+
+services:
+  gateway:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - API_KEY=${API_KEY}
+      - N8N_SYSTEM_WEBHOOK_URL=${N8N_SYSTEM_WEBHOOK_URL}
+      - GEOIP_CITY_DB_PATH=/app/GeoLite2-City.mmdb
+      - GEOIP_ASN_DB_PATH=/app/GeoLite2-ASN.mmdb
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro
+      - ./GeoLite2-ASN.mmdb:/app/GeoLite2-ASN.mmdb:ro
+
+  worker_1:
+    build: .
+    command: python -m arq app.workers.arq_settings.WorkerSettings
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - API_KEY=${API_KEY}
+      - N8N_SYSTEM_WEBHOOK_URL=${N8N_SYSTEM_WEBHOOK_URL}
+      - GEOIP_CITY_DB_PATH=/app/GeoLite2-City.mmdb
+      - GEOIP_ASN_DB_PATH=/app/GeoLite2-ASN.mmdb
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro
+      - ./GeoLite2-ASN.mmdb:/app/GeoLite2-ASN.mmdb:ro
+
+  worker_2:
+    build: .
+    command: python -m arq app.workers.arq_settings.WorkerSettings
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - API_KEY=${API_KEY}
+      - N8N_SYSTEM_WEBHOOK_URL=${N8N_SYSTEM_WEBHOOK_URL}
+      - GEOIP_CITY_DB_PATH=/app/GeoLite2-City.mmdb
+      - GEOIP_ASN_DB_PATH=/app/GeoLite2-ASN.mmdb
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro
+      - ./GeoLite2-ASN.mmdb:/app/GeoLite2-ASN.mmdb:ro
+
+  watcher_1:
+    build: .
+    command: python -m app.watchers.watcher_process
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - API_KEY=${API_KEY}
+      - N8N_SYSTEM_WEBHOOK_URL=${N8N_SYSTEM_WEBHOOK_URL}
+    depends_on:
+      - postgres
+      - redis
+
+  watcher_2:
+    build: .
+    command: python -m app.watchers.watcher_process
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - API_KEY=${API_KEY}
+      - N8N_SYSTEM_WEBHOOK_URL=${N8N_SYSTEM_WEBHOOK_URL}
+    depends_on:
+      - postgres
+      - redis
+
+  watcher_3:
+    build: .
+    command: python -m app.watchers.watcher_process
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - API_KEY=${API_KEY}
+      - N8N_SYSTEM_WEBHOOK_URL=${N8N_SYSTEM_WEBHOOK_URL}
+    depends_on:
+      - postgres
+      - redis
+
+  watcher_4:
+    build: .
+    command: python -m app.watchers.watcher_process
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - API_KEY=${API_KEY}
+      - N8N_SYSTEM_WEBHOOK_URL=${N8N_SYSTEM_WEBHOOK_URL}
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: fleet_network
