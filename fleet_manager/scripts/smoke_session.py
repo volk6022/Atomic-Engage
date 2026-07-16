@@ -17,11 +17,11 @@ Examples
 python scripts/smoke_session.py \
     --meta /path/to/account.json \
     --session-string "BQ...." \
-    --proxy "socks5://<login>__cr.us:<password>@np.puls-proxy.com:11000"
+    --proxy "socks5://<login>__cr.us:<password>@proxy-host.example.com:11000"
 
 # config-only (no auth): just validate proxy reachability + geo coherence
 python scripts/smoke_session.py --meta account.json \
-    --proxy "socks5://<login>__cr.us:<password>@np.puls-proxy.com:11000" --check-only
+    --proxy "socks5://<login>__cr.us:<password>@proxy-host.example.com:11000" --check-only
 """
 import argparse
 import asyncio

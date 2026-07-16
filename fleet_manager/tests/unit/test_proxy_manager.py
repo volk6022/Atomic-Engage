@@ -31,11 +31,11 @@ def test_parse_proxy_url_no_auth(manager):
 
 
 def test_parse_proxy_url_socks5_with_underscore_login(manager):
-    # socks5 scheme + provider login encoding the exit country (puls-proxy style).
+    # socks5 scheme + provider login encoding the exit country (proxy style).
     host, port, user, pw = manager.parse_proxy_url(
-        "socks5://abc__cr.us:secret@np.puls-proxy.com:11000"
+        "socks5://abc__cr.us:secret@proxy-host.example.com:11000"
     )
-    assert host == "np.puls-proxy.com" and port == 11000
+    assert host == "proxy-host.example.com" and port == 11000
     assert user == "abc__cr.us" and pw == "secret"
 
 

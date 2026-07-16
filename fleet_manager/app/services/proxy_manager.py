@@ -19,11 +19,11 @@ class ProxyManager:
 
     def country_from_login_hint(self, url: str) -> Optional[str]:
         """Some residential providers encode the exit country in the proxy login,
-        e.g. puls-proxy `<login>__cr.us`. Returns an ISO-3166 alpha-2 or None."""
+        e.g. proxy `<login>__cr.us`. Returns an ISO-3166 alpha-2 or None."""
         _h, _p, username, _pw = self.parse_proxy_url(url)
         if username and "__cr." in username:
             tail = username.split("__cr.", 1)[1]
-            # the country is the leading token; puls appends params after it with
+            # the country is the leading token; the provider appends params after it with
             # either '.' or ';' (e.g. "ru;sessttl.10"), so split on both.
             cc = tail.replace("_", ".").replace(";", ".").split(".")[0]
             if len(cc) == 2 and cc.isalpha():
