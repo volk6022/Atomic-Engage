@@ -46,7 +46,9 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # The app serves no bare /health -- its liveness route is /v1/fleet/health,
+      # which is deliberately unauthenticated so this check needs no API key.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/fleet/health"]
       interval: 10s
       timeout: 5s
       retries: 3

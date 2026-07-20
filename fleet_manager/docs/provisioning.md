@@ -47,7 +47,7 @@ Bring the instance up (shared image `atomic-engage:latest` must be built once â€
 cd instances/246903202
 docker compose --env-file .env up -d
 docker compose --env-file .env ps
-curl -f http://localhost:18081/health
+curl -f http://localhost:18081/v1/fleet/health
 ```
 
 Seed the proxy pool against the running gateway (real puls creds from the env, never on
