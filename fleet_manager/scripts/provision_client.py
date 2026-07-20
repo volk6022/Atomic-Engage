@@ -93,20 +93,28 @@ def validate_allocation(
     client_id: str,
     gateway_port: int,
     proxy_range: tuple[int, int],
+    allow_existing: bool = False,
 ) -> None:
-    """Refuse client-id reuse, gateway-port reuse, out-of-pool or overlapping slices."""
+    """Refuse client-id reuse, gateway-port reuse, out-of-pool or overlapping slices.
+
+    ``allow_existing`` is for the seed-only pass over a client that was already
+    rendered: there the entry is expected to be present, and its own port and
+    slice must not be read as collisions with itself.
+    """
     if proxy_range[0] < ENGAGE_PROXY_PORT_MIN or proxy_range[1] > ENGAGE_PROXY_PORT_MAX:
         raise SystemExit(
             f"proxy slice {proxy_range[0]}-{proxy_range[1]} outside Engage pool "
             f"{ENGAGE_PROXY_PORT_MIN}-{ENGAGE_PROXY_PORT_MAX}"
         )
     instances = registry.get("instances", {})
-    if client_id in instances:
+    if client_id in instances and not allow_existing:
         raise SystemExit(
             f"client_id {client_id!r} already in registry; refusing to overwrite "
             f"(delete its instances/{client_id}/ dir + registry entry to re-provision)"
         )
     for other_id, meta in instances.items():
+        if other_id == client_id:
+            continue
         if meta.get("gateway_port") == gateway_port:
             raise SystemExit(
                 f"gateway_port {gateway_port} already used by {other_id!r}"
@@ -127,6 +135,33 @@ def build_proxy_url(
         f"http://{puls_id}__cr.{cc.lower()};sessttl.{sessttl}:"
         f"{password}@{PULS_PROXY_HOST}:{port}"
     )
+
+
+def build_proxy_specs(proxy_range: tuple[int, int], args) -> list[dict]:
+    """One proxy row per port in the slice; the password stays a placeholder."""
+    return [
+        {
+            "port": port,
+            "country": args.country.upper(),
+            "proxy_type": args.proxy_type,
+            "tz_offset": args.tz_offset,
+            "sessttl": args.sessttl,
+            "url": build_proxy_url(
+                PULS_ID_PLACEHOLDER, args.country, args.sessttl,
+                PULS_PASSWORD_PLACEHOLDER, port,
+            ),
+        }
+        for port in range(proxy_range[0], proxy_range[1] + 1)
+    ]
+
+
+def read_env_value(env_path: Path, key: str) -> str | None:
+    """Read one KEY=value back out of a rendered instance .env."""
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1].strip()
+    return None
 
 
 def render_env_file(env_path: Path, values: dict[str, str]) -> None:
@@ -310,6 +345,10 @@ def main() -> int:
     if len(args.country) != 2 or not args.country.isalpha():
         raise SystemExit(f"--country {args.country!r} must be a 2-letter ISO code")
 
+    # --render-only promises to touch no network; --seed-proxies is a network call.
+    if args.render_only and args.seed_proxies:
+        raise SystemExit("--render-only and --seed-proxies are mutually exclusive")
+
     # Validate N8N webhook URL (GAP 1)
     if not args.n8n_webhook_url:
         if args.render_only:
@@ -329,7 +368,46 @@ def main() -> int:
     instances_dir = Path(args.instances_dir)
     registry_path = instances_dir / "registry.json"
     registry = load_registry(registry_path)
-    validate_allocation(registry, args.client_id, args.gateway_port, proxy_range)
+
+    # --seed-proxies on its own is the SECOND phase of the documented flow:
+    # render-only, bring the stack up, then seed. The client is therefore already
+    # in the registry, and re-rendering it would be actively destructive -- it
+    # would mint a fresh POSTGRES_PASSWORD and API_KEY over the .env the running
+    # containers were started from, so the seed would authenticate with a key the
+    # gateway never had and the next `compose up` would hand postgres a password
+    # its existing volume does not know. Seed-only therefore reads the live key
+    # back out and writes nothing.
+    seed_only = args.seed_proxies and not args.render_only
+
+    validate_allocation(
+        registry, args.client_id, args.gateway_port, proxy_range,
+        allow_existing=seed_only,
+    )
+
+    if seed_only:
+        client_dir = instances_dir / args.client_id
+        env_path = client_dir / ".env"
+        if not env_path.exists():
+            raise SystemExit(
+                f"--seed-proxies expects an already-rendered instance, but "
+                f"{env_path} does not exist (run without --seed-proxies first)"
+            )
+        api_key = read_env_value(env_path, "API_KEY")
+        if not api_key:
+            raise SystemExit(f"API_KEY not found in {env_path}")
+        puls_id = os.environ.get("PULS_PROXY_ID")
+        puls_password = os.environ.get("PULS_PROXY_PASSWORD")
+        if not puls_id or not puls_password:
+            raise SystemExit(
+                "PULS_PROXY_ID and PULS_PROXY_PASSWORD must be set in environment "
+                "to run --seed-proxies"
+            )
+        proxy_specs = build_proxy_specs(proxy_range, args)
+        n_ports = proxy_range[1] - proxy_range[0] + 1
+        print(f"[seed-only] reusing existing instances/{args.client_id}/.env (no re-render)")
+        return _run_proxy_seeding(
+            args.gateway_port, api_key, proxy_specs, args.client_id, n_ports
+        )
 
     # ── secrets (generated, never logged in full) ───────────────────────────
     postgres_password = args.postgres_password or secrets.token_urlsafe(24)
@@ -365,20 +443,7 @@ def main() -> int:
     )
 
     # proxies.seed.json — one row per port, password kept as a placeholder.
-    proxy_specs = [
-        {
-            "port": port,
-            "country": args.country.upper(),
-            "proxy_type": args.proxy_type,
-            "tz_offset": args.tz_offset,
-            "sessttl": args.sessttl,
-            "url": build_proxy_url(
-                PULS_ID_PLACEHOLDER, args.country, args.sessttl,
-                PULS_PASSWORD_PLACEHOLDER, port,
-            ),
-        }
-        for port in range(proxy_range[0], proxy_range[1] + 1)
-    ]
+    proxy_specs = build_proxy_specs(proxy_range, args)
     (client_dir / "proxies.seed.json").write_text(
         json.dumps(proxy_specs, indent=2), encoding="utf-8"
     )
@@ -406,18 +471,8 @@ def main() -> int:
     print(f"[render] proxy slice {proxy_range[0]}-{proxy_range[1]} ({n_ports} ports), country={args.country.upper()}, sessttl={args.sessttl}m")
     print(f"[render] registry -> {registry_path}")
 
-    # ── live proxy seed (skipped in render-only, required in seed-proxies) ────
-    if args.seed_proxies:
-        # GAP 3: --seed-proxies flag: render done above, now ONLY seed proxies
-        puls_id = os.environ.get("PULS_PROXY_ID")
-        puls_password = os.environ.get("PULS_PROXY_PASSWORD")
-        if not puls_id or not puls_password:
-            raise SystemExit(
-                "PULS_PROXY_ID and PULS_PROXY_PASSWORD must be set in environment "
-                "to run --seed-proxies"
-            )
-        return _run_proxy_seeding(args.gateway_port, api_key, proxy_specs, args.client_id, n_ports)
-
+    # Seed-only returned long before here; a fresh provision falls through to the
+    # live seed at the end unless --render-only asked for files and nothing else.
     if args.render_only:
         print("[render-only] skipped live proxy seed + docker. Next steps:")
         print(f"  cd instances/{args.client_id} && docker compose --env-file .env up -d")
