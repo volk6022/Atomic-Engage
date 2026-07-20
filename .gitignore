@@ -228,6 +228,11 @@ proxies.20ports.bak
 *.session-journal
 tdata/
 temp_convert_sessions/
+# Account credential dumps. The *.session rules above miss the sidecar JSON,
+# which is the more dangerous half: accounts.json holds a session_string per
+# account (full account access, no phone or code needed) and the per-account
+# files hold app_hash and a twoFA field. Ignore the whole directory.
+raw-tg-sessions/
 # Python envs / caches
 .venv/
 venv/

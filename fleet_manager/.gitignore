@@ -1,1 +1,11 @@
 dump.rdb
+
+# Per-client rendered instances hold secrets (.env: POSTGRES_PASSWORD, API_KEY).
+# Never commit client instance dirs. Keep the folder placeholder only.
+instances/*/
+!instances/.gitkeep
+# The registry is per-machine fleet state, not source: it records which clients
+# exist on THIS host with their ports and db names. Committing the dev box's
+# copy would push test instances into the repo and then collide with the
+# server's own registry. Each host builds its own as it provisions.
+instances/registry.json
