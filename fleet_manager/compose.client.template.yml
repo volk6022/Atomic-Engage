@@ -1,0 +1,181 @@
+# Per-client Atomic Engage instance (M4 hybrid isolation).
+#
+# This is the shared, parametrized template. `scripts/provision_client.py` copies
+# it verbatim into `instances/<client_id>/docker-compose.yml` and writes a sibling
+# `.env` holding every value below. `docker compose` interpolates `${VAR}` from that
+# `.env` at parse time, so one image + one template serves every tenant.
+#
+# Isolation per client (all keyed off ${CLIENT_ID}):
+#   - own postgres DB (${POSTGRES_DB}/${POSTGRES_USER}/${POSTGRES_PASSWORD})
+#   - own redis
+#   - own named volumes  (postgres_data-${CLIENT_ID}, redis_data-${CLIENT_ID})
+#   - own docker network  (fleet_network-${CLIENT_ID})
+#   - own API_KEY (${API_KEY}) and published gateway port (${GATEWAY_PORT})
+#
+# postgres/redis are NOT published to the host (internal-only) so no per-client host
+# port collisions and no external exposure; reach them via `docker compose exec` or a
+# one-off `docker compose run` (see docs/provisioning.md). Only the gateway is published.
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  REDIS_URL: redis://redis:6379
+  API_KEY: ${API_KEY}
+  N8N_SYSTEM_WEBHOOK_URL: ${N8N_SYSTEM_WEBHOOK_URL}
+  GEOIP_CITY_DB_PATH: /app/GeoLite2-City.mmdb
+  GEOIP_ASN_DB_PATH: /app/GeoLite2-ASN.mmdb
+
+services:
+  gateway:
+    image: ${ENGAGE_IMAGE:-atomic-engage:latest}
+    container_name: gateway-${CLIENT_ID}
+    ports:
+      - "${GATEWAY_PORT}:8000"
+    environment:
+      <<: *app-env
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro
+      - ./GeoLite2-ASN.mmdb:/app/GeoLite2-ASN.mmdb:ro
+    restart: unless-stopped
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker_1:
+    image: ${ENGAGE_IMAGE:-atomic-engage:latest}
+    container_name: worker_1-${CLIENT_ID}
+    command: python -m arq app.workers.arq_settings.WorkerSettings
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro
+      - ./GeoLite2-ASN.mmdb:/app/GeoLite2-ASN.mmdb:ro
+    restart: unless-stopped
+    mem_limit: 512m
+
+  worker_2:
+    image: ${ENGAGE_IMAGE:-atomic-engage:latest}
+    container_name: worker_2-${CLIENT_ID}
+    command: python -m arq app.workers.arq_settings.WorkerSettings
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro
+      - ./GeoLite2-ASN.mmdb:/app/GeoLite2-ASN.mmdb:ro
+    restart: unless-stopped
+    mem_limit: 512m
+
+  watcher_1:
+    image: ${ENGAGE_IMAGE:-atomic-engage:latest}
+    container_name: watcher_1-${CLIENT_ID}
+    command: python -m app.watchers.watcher_process
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 384m
+
+  watcher_2:
+    image: ${ENGAGE_IMAGE:-atomic-engage:latest}
+    container_name: watcher_2-${CLIENT_ID}
+    command: python -m app.watchers.watcher_process
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 384m
+
+  watcher_3:
+    image: ${ENGAGE_IMAGE:-atomic-engage:latest}
+    container_name: watcher_3-${CLIENT_ID}
+    command: python -m app.watchers.watcher_process
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 384m
+
+  watcher_4:
+    image: ${ENGAGE_IMAGE:-atomic-engage:latest}
+    container_name: watcher_4-${CLIENT_ID}
+    command: python -m app.watchers.watcher_process
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 384m
+
+  postgres:
+    image: postgres:15
+    container_name: postgres-${CLIENT_ID}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: redis-${CLIENT_ID}
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  # Interpolating ${CLIENT_ID} in the top-level volume KEY is rejected by
+  # Compose v2/v5 schema validation; parametrize the name via the `name:`
+  # sub-property instead (same pattern the networks block below uses).
+  postgres_data:
+    name: postgres_data-${CLIENT_ID}
+    driver: local
+  redis_data:
+    name: redis_data-${CLIENT_ID}
+    driver: local
+
+networks:
+  default:
+    name: fleet_network-${CLIENT_ID}
