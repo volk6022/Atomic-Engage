@@ -66,6 +66,20 @@ python scripts/provision_client.py \
 > `http://<id>__cr.<cc>;sessttl.<ttl>:<pass>@np.puls-proxy.com:<port>` — the country is
 > parsed back out of the login by `ProxyManager.country_from_login_hint`.)
 
+## 2a. Register an API credential (required before accounts)
+
+Every account is assigned an `ApiCredential` (Telegram `api_id` / `api_hash`) at
+import time, picked least-loaded. A fresh instance has none, so account seeding fails
+with `No API credentials available for <id>` until at least one exists:
+
+```bash
+curl -X POST http://localhost:18081/v1/api-credentials/ \
+  -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"api_id": 2040, "api_hash": "<hash>"}'
+```
+
+One credential can back many accounts; add more to spread the load.
+
 ## 2. Seed accounts into a client
 
 `accounts.json` is produced by `scripts/convert_sessions.py`

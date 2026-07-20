@@ -29,6 +29,14 @@ import os
 import sys
 from pathlib import Path
 
+# Invoked by absolute path (`python /app/scripts/seed_accounts.py`), which puts
+# /app/scripts on sys.path rather than /app, so `import app.db.models` misses.
+# The image's editable install does not cover this either: it runs before the
+# source is COPYed in, so there is nothing for it to link. Add the project root.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 
 def load_accounts(path: Path) -> list[dict]:
     with open(path, encoding="utf-8") as f:
