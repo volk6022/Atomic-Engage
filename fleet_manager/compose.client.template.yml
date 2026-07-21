@@ -29,7 +29,13 @@ services:
     image: ${ENGAGE_IMAGE:-atomic-engage:latest}
     container_name: gateway-${CLIENT_ID}
     ports:
-      - "${GATEWAY_PORT}:8000"
+      # Bind to loopback ONLY. A bare "${GATEWAY_PORT}:8000" publishes on 0.0.0.0,
+      # and Docker's DNAT bypasses ufw entirely (its rules land in FORWARD, not
+      # INPUT), so the gateway would be reachable from the internet with nothing
+      # but the API key in front of it -- verified happening in prod on
+      # 2026-07-21. Public access is Caddy's job: it terminates TLS and maps
+      # /engage/<client>/* to this port over loopback.
+      - "127.0.0.1:${GATEWAY_PORT}:8000"
     environment:
       <<: *app-env
       POSTGRES_USER: ${POSTGRES_USER}
