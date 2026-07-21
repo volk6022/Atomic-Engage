@@ -49,6 +49,20 @@ WARMUP_SCHEDULES = {
             "ready":        {"days": 12, "actions": ["invite_to_group", "send_message"]},
         },
     },
+    # Bench profile: zero-day tiers. Service-testing accounts are meant to be created
+    # `active` outright, but a use-case absent from this map makes advance_tier_if_due
+    # return None, so one accidentally left in `warmup` would never graduate. With a
+    # zero budget each tick promotes one tier, reaching `ready` (and `active`) instead
+    # of stalling forever.
+    "service_testing": {
+        "total_days": 0,
+        "tiers": {
+            "fresh":        {"days": 0, "actions": ["profile_setup"]},
+            "basic":        {"days": 0, "actions": ["react", "read"]},
+            "intermediate": {"days": 0, "actions": ["react", "read"]},
+            "ready":        {"days": 0, "actions": ["react", "send_message"]},
+        },
+    },
 }
 
 # Per-use-case daily caps (research R5 / KB-derived defaults; tune per cohort in
@@ -59,6 +73,9 @@ RATE_LIMITS = {
     "join_groups": {"reactions_per_day": 30, "messages_per_day": 0,  "joins_per_day": 5, "invites_per_day": 0,  "resolves_per_day": 100},
     "cold_dm":     {"reactions_per_day": 30, "messages_per_day": 20, "joins_per_day": 0, "invites_per_day": 0,  "resolves_per_day": 100},
     "inviting":    {"reactions_per_day": 30, "messages_per_day": 10, "joins_per_day": 3, "invites_per_day": 20, "resolves_per_day": 100},
+    # Bench profile — nominal ceilings so a budget never silently absorbs a test
+    # result. Deliberately unsafe for real outreach; see UseCase.SERVICE_TESTING.
+    "service_testing": {"reactions_per_day": 1000, "messages_per_day": 1000, "joins_per_day": 1000, "invites_per_day": 1000, "resolves_per_day": 1000},
 }
 
 # Cap PROFILES (feature 003, FR-340). `conservative` == the RATE_LIMITS above
@@ -72,6 +89,10 @@ RATE_LIMIT_PROFILES = {
         "join_groups": {"reactions_per_day": 200, "messages_per_day": 0,  "joins_per_day": 30, "invites_per_day": 0,  "resolves_per_day": 150},
         "cold_dm":     {"reactions_per_day": 150, "messages_per_day": 30, "joins_per_day": 0,  "invites_per_day": 0,  "resolves_per_day": 150},
         "inviting":    {"reactions_per_day": 150, "messages_per_day": 15, "joins_per_day": 20, "invites_per_day": 40, "resolves_per_day": 150},
+        # Same nominal ceilings under `mature`: a missing use-case here resolves to
+        # an empty dict and every cap reads 0, which would block the bench profile
+        # entirely the moment the fleet is switched to this profile.
+        "service_testing": {"reactions_per_day": 1000, "messages_per_day": 1000, "joins_per_day": 1000, "invites_per_day": 1000, "resolves_per_day": 1000},
     },
 }
 

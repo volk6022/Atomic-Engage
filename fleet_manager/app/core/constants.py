@@ -44,6 +44,10 @@ class UseCase(StrEnum):
     JOIN_GROUPS = "join_groups"
     COLD_DM = "cold_dm"
     INVITING = "inviting"
+    # Bench profile for exercising the fleet end to end: nominal 1000/day on every
+    # per-use-case axis so budgets never mask what is being tested. NOT for real
+    # outreach -- these caps are far above anything Telegram tolerates sustained.
+    SERVICE_TESTING = "service_testing"
 
 
 class TaskStatus(StrEnum):
