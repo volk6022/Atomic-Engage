@@ -30,8 +30,15 @@ def memory_over_threshold(threshold: float = MEMORY_RESTART_THRESHOLD) -> bool:
 async def main():
     app_logging.setup_logging()
 
-    process_id = int(os.environ.get("WATCHER_PROCESS_ID", os.getpid()))
-    logger.info(f"watcher_starting process_id={process_id}")
+    # Defaults to a single process owning the whole fleet. The old fallback was
+    # os.getpid(), which inside a container is always 1 -- so four watcher containers
+    # all identified as process 1 and, with the unsharded query, each claimed every
+    # account. Set WATCHER_PROCESS_ID (1..N) and WATCHER_TOTAL=N per container.
+    process_id = int(os.environ.get("WATCHER_PROCESS_ID", 1))
+    total_processes = int(os.environ.get("WATCHER_TOTAL", 1))
+    logger.info(
+        f"watcher_starting process_id={process_id}/{total_processes}"
+    )
 
     engine = get_engine()
     async with engine.begin() as conn:
@@ -40,7 +47,7 @@ async def main():
     session_maker = get_session_maker()
     redis_conn = await get_redis()
 
-    rotation_mgr = WatcherRotationManager(process_id)
+    rotation_mgr = WatcherRotationManager(process_id, total_processes)
 
     async with session_maker() as db:
         account_ids = await rotation_mgr.on_startup(db)

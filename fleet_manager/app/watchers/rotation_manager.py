@@ -20,15 +20,28 @@ class WatcherRotationManager:
     ROTATION_MIN = 7200
     ROTATION_MAX = 14400
 
-    def __init__(self, process_id: int):
+    def __init__(self, process_id: int, total_processes: int = 1):
         self.process_id = process_id
+        # How many watcher processes divide the fleet. Without it every process ran
+        # the same unfiltered query and claimed EVERY account, so a 4-watcher deploy
+        # opened four concurrent MTProto connections per account -- same auth key,
+        # same egress IP, four times over. That is both wasted capacity and exactly
+        # the sort of signal an anti-fraud system is built to notice.
+        self.total_processes = max(1, total_processes)
         self.current_shard: list[int] = []
         self.rotation_task: asyncio.Task = None
 
     async def on_startup(self, db):
+        # Deterministic partition: account id modulo the process count. Every
+        # account lands in exactly one shard, and a process restarting reclaims the
+        # same one without coordination.
         stmt = (
             select(Account)
-            .where(Account.status == "active")
+            .where(
+                Account.status == "active",
+                Account.id % self.total_processes
+                == (self.process_id - 1) % self.total_processes,
+            )
             .order_by(Account.last_activity_at.asc())
             .limit(self.SHARD_SIZE)
         )
@@ -41,7 +54,8 @@ class WatcherRotationManager:
         await watcher_shard_set(redis_conn, self.process_id, self.current_shard)
 
         logger.info(
-            f"shard_claimed process={self.process_id} accounts={len(self.current_shard)}"
+            f"shard_claimed process={self.process_id}/{self.total_processes} "
+            f"accounts={len(self.current_shard)} ids={self.current_shard}"
         )
 
         self.rotation_task = asyncio.create_task(self._rotation_loop(db))
@@ -62,9 +76,16 @@ class WatcherRotationManager:
 
         await watcher_shard_set(redis_conn, self.process_id, [])
 
+        # Deterministic partition: account id modulo the process count. Every
+        # account lands in exactly one shard, and a process restarting reclaims the
+        # same one without coordination.
         stmt = (
             select(Account)
-            .where(Account.status == "active")
+            .where(
+                Account.status == "active",
+                Account.id % self.total_processes
+                == (self.process_id - 1) % self.total_processes,
+            )
             .order_by(Account.last_activity_at.asc())
             .limit(self.SHARD_SIZE)
         )

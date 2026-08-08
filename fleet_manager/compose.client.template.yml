@@ -95,7 +95,12 @@ services:
     image: ${ENGAGE_IMAGE:-atomic-engage:latest}
     container_name: watcher_1-${CLIENT_ID}
     command: python -m app.watchers.watcher_process
-    environment: *app-env
+    environment:
+      <<: *app-env
+      # Which slice of the fleet this process owns. Without these every watcher
+      # claimed every account and opened a duplicate connection per account.
+      WATCHER_PROCESS_ID: "1"
+      WATCHER_TOTAL: "4"
     depends_on:
       postgres:
         condition: service_healthy
@@ -108,7 +113,12 @@ services:
     image: ${ENGAGE_IMAGE:-atomic-engage:latest}
     container_name: watcher_2-${CLIENT_ID}
     command: python -m app.watchers.watcher_process
-    environment: *app-env
+    environment:
+      <<: *app-env
+      # Which slice of the fleet this process owns. Without these every watcher
+      # claimed every account and opened a duplicate connection per account.
+      WATCHER_PROCESS_ID: "2"
+      WATCHER_TOTAL: "4"
     depends_on:
       postgres:
         condition: service_healthy
@@ -121,7 +131,12 @@ services:
     image: ${ENGAGE_IMAGE:-atomic-engage:latest}
     container_name: watcher_3-${CLIENT_ID}
     command: python -m app.watchers.watcher_process
-    environment: *app-env
+    environment:
+      <<: *app-env
+      # Which slice of the fleet this process owns. Without these every watcher
+      # claimed every account and opened a duplicate connection per account.
+      WATCHER_PROCESS_ID: "3"
+      WATCHER_TOTAL: "4"
     depends_on:
       postgres:
         condition: service_healthy
@@ -134,7 +149,12 @@ services:
     image: ${ENGAGE_IMAGE:-atomic-engage:latest}
     container_name: watcher_4-${CLIENT_ID}
     command: python -m app.watchers.watcher_process
-    environment: *app-env
+    environment:
+      <<: *app-env
+      # Which slice of the fleet this process owns. Without these every watcher
+      # claimed every account and opened a duplicate connection per account.
+      WATCHER_PROCESS_ID: "4"
+      WATCHER_TOTAL: "4"
     depends_on:
       postgres:
         condition: service_healthy
