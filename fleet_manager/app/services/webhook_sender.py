@@ -24,6 +24,24 @@ class WebhookSender:
     def __init__(self, http_client: Optional[httpx.AsyncClient] = None):
         self.client = http_client or httpx.AsyncClient(timeout=10.0)
 
+    async def send_once(self, url: str, payload: dict) -> tuple[bool, str]:
+        """One POST, no retry, no sleeping. Returns (delivered, detail).
+
+        The retry schedule lives in the `deliver_webhook` worker instead of inside this
+        call. `send` below keeps the old inline-retry behaviour for callers that have no
+        queue, but nothing on the task path may use it: its backoff sums to 450 s and it
+        is awaited inside the job, so a single unreachable receiver used to hold a worker
+        slot for seven and a half minutes -- observed in production against a
+        `N8N_SYSTEM_WEBHOOK_URL` that did not resolve.
+        """
+        try:
+            response = await self.client.post(url, json=payload)
+        except httpx.RequestError as e:
+            return False, f"{type(e).__name__}: {e}"
+        if response.status_code < 400:
+            return True, str(response.status_code)
+        return False, f"HTTP {response.status_code}"
+
     async def send(self, delivery_id: int, url: str, payload: dict) -> bool:
         logger = logging.getLogger(f"webhook.{delivery_id}")
 

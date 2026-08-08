@@ -34,12 +34,19 @@ async def test_s2_sc1_incoming_message_webhook_within_5s(account_factory, sessio
     fake_user.first_name = "Test"
     fake_user.last_name = "Sender"
 
+    fake_chat = MagicMock()
+    fake_chat.id = 555000111
+    fake_chat.type = MagicMock(value="private")
+    fake_chat.username = "test_sender"
+    fake_chat.title = None
+
     fake_message = MagicMock()
     fake_message.from_user = fake_user
-    fake_message.chat = MagicMock()
-    fake_message.chat.id = 555000111
+    fake_message.sender_chat = None
+    fake_message.chat = fake_chat
     fake_message.id = 9001
     fake_message.text = "Hello fleet!"
+    fake_message.caption = None
     fake_message.date = datetime.now(timezone.utc)
 
     mock_client = AsyncMock()
@@ -51,15 +58,16 @@ async def test_s2_sc1_incoming_message_webhook_within_5s(account_factory, sessio
     with respx_lib.mock(assert_all_mocked=False) as mock:
         webhook_route = mock.post(N8N_WEBHOOK_URL).mock(return_value=httpx.Response(200))
 
-        async with session_maker() as session:
-            await handler.handle_new_message(
-                client=mock_client,
-                account_id=account_id,
-                message=fake_message,
-                db=session,
-                redis_conn=redis_client,
-                webhook_url=N8N_WEBHOOK_URL,
-            )
+        # Production contract (Feature 005): the handler receives the session_maker and
+        # owns its per-message session, matching app.watchers.watcher_process.
+        await handler.handle_new_message(
+            client=mock_client,
+            account_id=account_id,
+            message=fake_message,
+            db=session_maker,
+            redis_conn=redis_client,
+            webhook_url=N8N_WEBHOOK_URL,
+        )
 
     elapsed = time.monotonic() - start
 
@@ -71,6 +79,9 @@ async def test_s2_sc1_incoming_message_webhook_within_5s(account_factory, sessio
     assert body["account_id"] == account_id
     assert body["from_peer_id"] == fake_user.id
     assert body["message"] == fake_message.text
+    # S1.SC2 — enriched keys present on the DM path too (no regression)
+    assert body["is_channel_post"] is False
+    assert "chat_username" in body and "chat_title" in body
 
 
 @pytest.mark.asyncio

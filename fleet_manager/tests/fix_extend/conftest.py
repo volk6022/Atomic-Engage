@@ -117,7 +117,10 @@ class _FakeClient:
         await self._maybe_raise()
         return self.ctl.get("members_count", 5821)
 
-    async def get_chat_history(self, chat_id, limit=0, offset_id=0, min_id=0):
+    async def get_chat_history(self, chat_id, limit=0, min_id=0, max_id=0, offset_date=None, **kwargs):
+        # kurigram's get_chat_history keyword args (max_id/offset_date/etc, feature
+        # 006 §2) beyond min_id are accepted but not exercised by these fakes; **kwargs
+        # keeps this fake forward-compatible with worker-side call-shape changes.
         await self._maybe_raise()
         from datetime import datetime, timezone
         from pyrogram import enums
@@ -134,6 +137,8 @@ class _FakeClient:
             ]
         for m in posts:
             if min_id and m.id <= min_id:
+                continue
+            if max_id and m.id > max_id:
                 continue
             yield m
 

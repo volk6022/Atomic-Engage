@@ -31,7 +31,7 @@ def test_parse_proxy_url_no_auth(manager):
 
 
 def test_parse_proxy_url_socks5_with_underscore_login(manager):
-    # socks5 scheme + provider login encoding the exit country (proxy style).
+    # socks5 scheme + provider login encoding the exit country (residential proxy provider style).
     host, port, user, pw = manager.parse_proxy_url(
         "socks5://abc__cr.us:secret@proxy-host.example.com:11000"
     )
@@ -155,3 +155,34 @@ async def test_assign_reserve_returns_none_if_account_missing_phone_country(mana
     redis_conn = AsyncMock()
     result = await manager.assign_reserve(account, db, redis_conn)
     assert result is None
+
+
+# ── rotate_port (proxy auto-rotation on a bad sticky IP) ─────────────────────
+
+_STICKY = "http://login__cr.kz;sessttl.60:pw@proxy-host.example.com:11000"
+
+
+def test_rotate_port_changes_only_port_and_keeps_country(manager):
+    new = manager.rotate_port(_STICKY, lo=11000, hi=11019)
+    assert new != _STICKY
+    assert new.startswith("http://login__cr.kz;sessttl.60:pw@proxy-host.example.com:")
+    assert int(new.rpartition(":")[2]) != 11000
+    # login hint preserved -> exit country unchanged
+    assert manager.resolve_country(new) == "KZ"
+
+
+def test_rotate_port_stays_in_range_and_avoids_current(manager):
+    for _ in range(50):
+        port = int(manager.rotate_port(_STICKY, lo=11000, hi=11019).rpartition(":")[2])
+        assert 11000 <= port <= 11019 and port != 11000
+
+
+def test_rotate_port_honours_exclude(manager):
+    # exclude everything but 11005 -> must pick 11005
+    exclude = set(range(11000, 11020)) - {11005}
+    out = manager.rotate_port(_STICKY, lo=11000, hi=11019, exclude=exclude)
+    assert int(out.rpartition(":")[2]) == 11005
+
+
+def test_rotate_port_noop_without_numeric_port(manager):
+    assert manager.rotate_port("http://login@host") == "http://login@host"

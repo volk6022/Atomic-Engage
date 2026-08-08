@@ -12,6 +12,12 @@ test) can import it without a cycle.
 
 TIER_ORDER = ["fresh", "basic", "intermediate", "ready"]
 
+# Every behavioural action, for the service_testing bench profile below.
+_BENCH_ACTIONS = [
+    "profile_setup", "subscribe_channels", "read", "forward",
+    "react", "join_group", "invite_to_group", "cross_message_reply", "send_message",
+]
+
 WARMUP_SCHEDULES = {
     "reactions": {
         "total_days": 7,
@@ -49,18 +55,20 @@ WARMUP_SCHEDULES = {
             "ready":        {"days": 12, "actions": ["invite_to_group", "send_message"]},
         },
     },
-    # Bench profile: zero-day tiers. Service-testing accounts are meant to be created
-    # `active` outright, but a use-case absent from this map makes advance_tier_if_due
-    # return None, so one accidentally left in `warmup` would never graduate. With a
-    # zero budget each tick promotes one tier, reaching `ready` (and `active`) instead
-    # of stalling forever.
+    # Bench profile: zero-day tiers. A use-case absent from this map makes
+    # advance_tier_if_due return None, so an account left in `warmup` would never
+    # graduate; a zero budget promotes one tier per tick, reaching `ready` instead.
+    #
+    # Every tier permits every action on purpose: a bench account is
+    # created `fresh` and nothing promotes it before the first warmup_tick, so a
+    # tier-gated action list would make the profile refuse the very actions a bench
+    # run exists to exercise (join_group was rejected 409 this way). Ban-safety for
+    # this use_case rests on the daily caps below, not on the warmup ladder.
     "service_testing": {
         "total_days": 0,
         "tiers": {
-            "fresh":        {"days": 0, "actions": ["profile_setup"]},
-            "basic":        {"days": 0, "actions": ["react", "read"]},
-            "intermediate": {"days": 0, "actions": ["react", "read"]},
-            "ready":        {"days": 0, "actions": ["react", "send_message"]},
+            tier: {"days": 0, "actions": _BENCH_ACTIONS}
+            for tier in ("fresh", "basic", "intermediate", "ready")
         },
     },
 }
@@ -107,12 +115,17 @@ PREMIUM_CEILINGS = {
 }
 
 # Per-account daily caps for READ-only research actions (docs/research-agent-actions.md
-# §4.1). Reads are warmup-exempt (no behavioural footprint) but still budgeted so a
-# bursty enrichment/monitoring run can never flood the fleet. get_chat_history is the
-# heaviest (a tail of posts) → smallest budget.
+# §4.1, contract §5). Reads are warmup-exempt (no behavioural footprint) but still
+# budgeted so a bursty enrichment/monitoring run can never flood the fleet.
+#
+# get_chat_history was raised 80 -> 2000: a live measurement showed ~9000 messages/day
+# in one active discussion group alone; at 80 calls/day x 50 msgs/call, backfilling a
+# single group's past year would have taken two years.
 READ_LIMITS = {
     "resolve_username": 100,
     "get_chat_info": 200,
-    "get_chat_history": 80,
+    "get_chat_history": 2000,
     "search_public_chat": 50,
+    "get_chat_admins": 100,
+    "get_dialogs": 50,
 }

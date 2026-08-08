@@ -3,10 +3,27 @@
 Imported defensively so a kurigram version that renames/removes a class does not
 break import of the workers.
 """
+import asyncio
+
 from pyrogram import errors
 
 FloodWait = errors.FloodWait
 PeerIdInvalid = getattr(errors, "PeerIdInvalid", None)
+
+
+# Transport-level failures that mean "this proxy exit is bad / unreachable right now",
+# NOT a Telegram-side rejection. These trigger proxy-port rotation + retry rather than
+# a hard task failure. ConnectionError/TimeoutError subclass OSError, but we list them
+# for clarity; python-socks proxy errors are added defensively if importable.
+_CONN_TYPES = [OSError, asyncio.TimeoutError, TimeoutError, ConnectionError]
+try:  # python-socks raises its own ProxyError family for proxy-handshake failures
+    from python_socks import ProxyError, ProxyConnectionError, ProxyTimeoutError
+
+    _CONN_TYPES += [ProxyError, ProxyConnectionError, ProxyTimeoutError]
+except Exception:  # noqa: BLE001 — best-effort; OSError already covers most cases
+    pass
+
+CONNECTION_ERRORS = tuple(dict.fromkeys(_CONN_TYPES))
 
 # Any 401 means the session is no longer usable for this account → treat as banned.
 # `Unauthorized` is the 401 base class (covers UserDeactivated, UserDeactivatedBan,

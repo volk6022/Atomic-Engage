@@ -92,6 +92,9 @@ async def main():
                 # attributes messages to its OWN account, not the loop's last (H4).
                 @client.on_message(filters.incoming)
                 async def handle_msg(client, message, account_id=account_id):
+                    # Pass the session_maker (not a live session): the handler opens a
+                    # fresh per-message session so concurrent updates never share one
+                    # (Constitution I; Feature 005 contract).
                     await UpdateHandler().handle_new_message(
                         client=client,
                         account_id=account_id,

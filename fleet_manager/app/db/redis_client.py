@@ -99,6 +99,21 @@ async def proxy_health_get(redis_client: redis.Redis, proxy_id: int) -> bool:
     return value == "1"
 
 
+async def seen_message_setnx(
+    redis_client: redis.Redis, chat_id: int, message_id: int, ttl: int = 3600
+) -> bool:
+    """First-sighting guard for Watcher forwards (Feature 005, US3).
+
+    Atomically records ``seen:{chat_id}:{message_id}`` with a TTL. Returns True when this
+    is the FIRST time the message is seen (→ proceed with the webhook), False when it is
+    a duplicate (→ suppress). Prevents a Watcher restart from re-forwarding — and thus
+    double-triggering — a recently handled post.
+    """
+    key = f"seen:{chat_id}:{message_id}"
+    created = await redis_client.set(key, "1", nx=True, ex=ttl)
+    return bool(created)
+
+
 async def watcher_shard_set(
     redis_client: redis.Redis, process_id: int, account_ids: list[int]
 ) -> None:

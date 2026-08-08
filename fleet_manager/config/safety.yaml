@@ -42,6 +42,20 @@ warmup_schedules:
       basic:        {days: 12, actions: [react, cross_message_reply, read]}
       intermediate: {days: 14, actions: [join_group, react, cross_message_reply]}
       ready:        {days: 12, actions: [invite_to_group, send_message]}
+  # Bench profile: zero-day tiers, and every tier permits every action. A bench
+  # account is created `fresh` and nothing promotes it before the first warmup_tick,
+  # so a tier-gated list would refuse the very actions a bench run exists to exercise
+  # (join_group came back 409 this way). Ban-safety here rests on the daily caps
+  # below, not on the warmup ladder. Matches app/core/safety_defaults.py.
+  service_testing:
+    total_days: 0
+    tiers:
+      fresh:        &bench_actions
+        days: 0
+        actions: [profile_setup, subscribe_channels, read, forward, react, join_group, invite_to_group, cross_message_reply, send_message]
+      basic:        *bench_actions
+      intermediate: *bench_actions
+      ready:        *bench_actions
 
 # Per-use-case daily caps (research R5 / KB-derived; tune per cohort).
 # 0 == the action is not part of that use-case's normal behaviour.
@@ -50,12 +64,19 @@ rate_limits:
   join_groups: {reactions_per_day: 30, messages_per_day: 0,  joins_per_day: 5, invites_per_day: 0,  resolves_per_day: 100}
   cold_dm:     {reactions_per_day: 30, messages_per_day: 20, joins_per_day: 0, invites_per_day: 0,  resolves_per_day: 100}
   inviting:    {reactions_per_day: 30, messages_per_day: 10, joins_per_day: 3, invites_per_day: 20, resolves_per_day: 100}
+  # Bench profile — nominal ceilings so a budget never silently absorbs a test result.
+  # Deliberately unsafe for real outreach; see UseCase.SERVICE_TESTING.
+  service_testing: {reactions_per_day: 1000, messages_per_day: 1000, joins_per_day: 1000, invites_per_day: 1000, resolves_per_day: 1000}
 
-# Per-account daily caps for READ-only research actions (docs/research-agent-actions.md §4.1).
-# Warmup-exempt (no behavioural footprint) but budgeted so a bursty enrichment/monitoring
-# run can't flood the fleet. get_chat_history is heaviest -> smallest budget.
+# Per-account daily caps for READ-only research actions (docs/research-agent-actions.md
+# §4.1, contract §5). Warmup-exempt (no behavioural footprint) but budgeted so a bursty
+# enrichment/monitoring run can't flood the fleet. get_chat_history was raised
+# 80 -> 2000: a live measurement showed ~9000 messages/day in one active discussion
+# group alone, so the old cap would have taken two years to backfill a single group.
 read_limits:
   resolve_username: 100
   get_chat_info: 200
-  get_chat_history: 80
+  get_chat_history: 2000
   search_public_chat: 50
+  get_chat_admins: 100
+  get_dialogs: 50

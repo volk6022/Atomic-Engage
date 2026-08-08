@@ -16,6 +16,7 @@ def _make_account(
     work_start=9,
     work_end=22,
     tz_offset=10800,
+    geo_override=False,
 ):
     proxy = MagicMock()
     proxy.country = proxy_country
@@ -28,6 +29,9 @@ def _make_account(
     account.work_start = work_start
     account.work_end = work_end
     account.proxy.tz_offset = tz_offset
+    # A MagicMock attribute is truthy, so the geo-override branch would be
+    # taken by accident; the double has to state the default explicitly.
+    account.geo_override = geo_override
     return account
 
 
@@ -102,25 +106,27 @@ async def test_prepare_is_pure_gate_fifo_handled_by_run_task():
 
 @pytest.mark.asyncio
 async def test_prepare_geo_reject_sets_sleeping_and_returns_none():
+    """A geo mismatch sleeps the account and QUEUES the alert.
+
+    This used to assert an inline HTTP POST. Delivery moved off the task path
+    deliberately: awaiting it here meant an unreachable receiver held the worker for
+    the full 450 s backoff, so the alert is now persisted and handed to
+    `deliver_webhook` instead of being sent from inside the guard.
+    """
     account = _make_account(phone_country="RU", proxy_country="US")
     db = _make_db(account=account)
 
-    with respx_mock_ctx():
+    with patch("app.services.webhook_queue.enqueue_webhook") as mock_enqueue:
+        mock_enqueue.return_value = 1
         result = await BaseTask.prepare({}, 1, db)
 
     assert result is None
     assert account.status == AccountStatus.SLEEPING
     db.commit.assert_awaited()
-
-
-def respx_mock_ctx():
-    import respx
-    import httpx
-    mock = respx.mock(assert_all_mocked=False)
-    mock.post("https://your-n8n-instance.com/webhook/fleet").mock(
-        return_value=httpx.Response(200)
-    )
-    return mock
+    mock_enqueue.assert_awaited_once()
+    _, url, payload = mock_enqueue.await_args.args
+    assert payload["event"] == "geo_reject"
+    assert payload["account_id"] == 1
 
 
 @pytest.mark.asyncio

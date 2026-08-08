@@ -37,8 +37,11 @@ class Account(Base):
     api_credential_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("api_credentials.id"), nullable=False
     )
-    proxy_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("proxies.id"), nullable=False
+    # Nullable: a NULL proxy means "run on the host's own IP" (an intentional mode for
+    # a residential-IP box whose reputation beats the proxy pool). The worker path
+    # already tolerates account.proxy is None across geo/ASN/rotation gates.
+    proxy_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("proxies.id"), nullable=True
     )
     device_model: Mapped[str] = mapped_column(String(100), nullable=False)
     system_version: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -47,6 +50,17 @@ class Account(Base):
     system_lang_code: Mapped[str] = mapped_column(String(10), nullable=False)
     work_start: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
     work_end: Mapped[int] = mapped_column(Integer, nullable=False, default=22)
+    # Acknowledged phone/proxy country divergence. The geo gate compares the two
+    # strictly and sleeps the account on any mismatch, which is the right default. But
+    # a fleet bought as a batch has numbers from whatever countries the seller had,
+    # while the operator may deliberately run them all behind one stable ISP exit —
+    # the exit's *stability* matters more than its country. This flag records that the
+    # divergence is intentional for THIS account, so the gate stays armed everywhere
+    # else instead of being weakened globally or, worse, worked around by writing a
+    # false country onto the proxy row.
+    geo_override: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     flood_until: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -65,16 +79,16 @@ class Account(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()", onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
     api_credential: Mapped["ApiCredential"] = relationship(
         "ApiCredential", back_populates="accounts"
     )
-    proxy: Mapped["Proxy"] = relationship("Proxy", back_populates="accounts")
+    proxy: Mapped[Optional["Proxy"]] = relationship("Proxy", back_populates="accounts")
     tasks: Mapped[list["Task"]] = relationship("Task", back_populates="account")
 
 
@@ -86,7 +100,7 @@ class ApiCredential(Base):
     api_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     account_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
 
     accounts: Mapped[list["Account"]] = relationship(
@@ -106,7 +120,7 @@ class Proxy(Base):
     state: Mapped[str] = mapped_column(String(20), nullable=False, default="reserve")
     is_healthy: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
 
     accounts: Mapped[list["Account"]] = relationship("Account", back_populates="proxy")
@@ -135,10 +149,10 @@ class Task(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()", onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
     account: Mapped["Account"] = relationship("Account", back_populates="tasks")
@@ -163,7 +177,7 @@ class WebhookDelivery(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
 
 
@@ -178,10 +192,10 @@ class GlobalPeer(Base):
     last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()", onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -203,7 +217,7 @@ class PeerAccessHash(Base):
     access_hash: Mapped[int] = mapped_column(BigInteger, nullable=False)
     is_min: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     obtained_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
 
 
@@ -222,7 +236,7 @@ class WarmupCrossPair(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
 
     source_account: Mapped["Account"] = relationship(
@@ -257,7 +271,7 @@ class TelemetryEvent(Base):
     outcome: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     warmup_params: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
 
     __table_args__ = (

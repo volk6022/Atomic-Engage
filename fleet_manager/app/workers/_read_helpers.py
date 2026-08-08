@@ -33,6 +33,24 @@ def _text_of(message) -> Optional[str]:
     return getattr(message, "text", None) or getattr(message, "caption", None)
 
 
+# Maps a NOT_FOUND_ERRORS exception to a stable machine-readable reason (§6 contract):
+# invalid username vs. a real but unreadable private channel vs. a stale peer are
+# different situations for the Radar channel registry, even though all three used to
+# collapse into the same bare `null`.
+_NOT_FOUND_REASONS = {
+    "UsernameNotOccupied": "username_not_found",
+    "UsernameInvalid": "username_not_found",
+    "ChannelPrivate": "not_public",
+    "ChannelInvalid": "not_public",
+    "PeerIdInvalid": "peer_unknown",
+}
+
+
+def not_found_reason(exc: BaseException) -> str:
+    """Classify one of `_tg_errors.NOT_FOUND_ERRORS` into a §6 `reason` string."""
+    return _NOT_FOUND_REASONS.get(type(exc).__name__, "not_found")
+
+
 def build_chat_info(chat, *, members_count: Optional[int] = None) -> dict:
     """Map a `Chat` to the get_chat_info result (§3.2)."""
     description = getattr(chat, "description", None)
@@ -58,10 +76,32 @@ def build_chat_info(chat, *, members_count: Optional[int] = None) -> dict:
 
 
 def build_post(message) -> dict:
-    """Map a `Message` to the post shape shared by get_chat_history (§3.3)."""
+    """Map a `Message` to the post shape shared by get_chat_history (§3.3, §1 contract).
+
+    Author/thread fields mirror `app.watchers._message_payload.build_incoming_message_payload`:
+    channel posts and anonymous admins carry `message.from_user is None`, so the human
+    author is read defensively via getattr and `sender_chat` is surfaced alongside it
+    rather than raising.
+    """
     text = _text_of(message)
     extracted = extract_contacts(text)
     date = getattr(message, "date", None)
+    edit_date = getattr(message, "edit_date", None)
+
+    from_user = getattr(message, "from_user", None)
+    sender_chat = getattr(message, "sender_chat", None)
+    reply_to_message = getattr(message, "reply_to_message", None)
+
+    # Thread root: `message_thread_id` is populated for forum topics only; a comment
+    # in a (non-forum) linked discussion group instead carries `reply_to_top_message_id`.
+    # Fall back to the replied-to message's own id when kurigram exposes neither header
+    # field directly (defensive — normally one of the two is set).
+    message_thread_id = (
+        getattr(message, "message_thread_id", None)
+        or getattr(message, "reply_to_top_message_id", None)
+        or getattr(reply_to_message, "id", None)
+    )
+
     return {
         "message_id": getattr(message, "id", None),
         "date": date.isoformat() if date is not None else None,
@@ -71,4 +111,19 @@ def build_post(message) -> dict:
         "urls": extracted["urls"],
         "emails": extracted["emails"],
         "phones": extracted["phones"],
+        "from_user_id": getattr(from_user, "id", None),
+        "from_username": getattr(from_user, "username", None),
+        "from_first_name": getattr(from_user, "first_name", None),
+        "from_last_name": getattr(from_user, "last_name", None),
+        "from_is_bot": bool(getattr(from_user, "is_bot", False) or False),
+        "sender_chat_id": getattr(sender_chat, "id", None),
+        "sender_chat_username": getattr(sender_chat, "username", None),
+        # automatic_forward (kurigram's actual attr, no `is_` prefix): a connected
+        # channel's post auto-relayed into its discussion group — the thread root,
+        # never a human comment (§1 contract note).
+        "is_automatic_forward": bool(getattr(message, "automatic_forward", False) or False),
+        "reply_to_message_id": getattr(message, "reply_to_message_id", None),
+        "message_thread_id": message_thread_id,
+        "edit_date": edit_date.isoformat() if edit_date is not None else None,
+        "outgoing": bool(getattr(message, "outgoing", False) or False),
     }

@@ -20,8 +20,8 @@ from app.core import floodwait as fw
 from app.db.models import Account, ApiCredential, Task
 from app.services import geo_match, telemetry, working_hours
 from app.services.geo_match import RiskLevel, is_datacenter_asn
+from app.services.proxy_manager import ProxyManager
 from app.services.stateless_manager import StatelessManager
-from app.services.webhook_sender import WebhookSender
 from app.workers import _tg_errors as tg
 
 logger = logging.getLogger(__name__)
@@ -59,17 +59,30 @@ class BaseTask:
             logger.info("account_%s_not_runnable status=%s", account_id, account.status)
             return None
 
+        # No proxy => the account uses the host's own IP (an intentional mode for a
+        # residential-IP box). Pass an empty proxy_country so the geo gate has nothing
+        # to compare against and stays OK, rather than the "XX" sentinel which would
+        # read as a country mismatch and force the account to SLEEPING.
         geo_result = geo_match.GeoMatchValidator().validate(
             phone_country=account.phone_country,
-            proxy_country=account.proxy.country if account.proxy else "XX",
+            proxy_country=account.proxy.country if account.proxy else "",
         )
-        if geo_result.risk == RiskLevel.CRITICAL:
+        if geo_result.risk == RiskLevel.CRITICAL and account.geo_override:
+            # Divergence acknowledged at onboarding for this account (see
+            # Account.geo_override). Log every time so it stays visible in the fleet
+            # logs rather than becoming an invisible permanent exemption.
+            logger.warning(
+                "geo_mismatch_overridden account=%s phone=%s proxy=%s",
+                account_id, account.phone_country,
+                account.proxy.country if account.proxy else "-",
+            )
+        elif geo_result.risk == RiskLevel.CRITICAL:
             account.status = AccountStatus.SLEEPING
             await db.commit()
-            await WebhookSender().send(
-                delivery_id=0,
-                url=get_settings().N8N_SYSTEM_WEBHOOK_URL,
-                payload={"event": "geo_reject", "account_id": account_id},
+            await _webhook(
+                get_settings().N8N_SYSTEM_WEBHOOK_URL,
+                {"event": "geo_reject", "account_id": account_id},
+                db=db,
             )
             return None
 
@@ -84,14 +97,14 @@ class BaseTask:
         ):
             account.status = AccountStatus.SLEEPING
             await db.commit()
-            await WebhookSender().send(
-                delivery_id=0,
-                url=get_settings().N8N_SYSTEM_WEBHOOK_URL,
-                payload={
+            await _webhook(
+                get_settings().N8N_SYSTEM_WEBHOOK_URL,
+                {
                     "event": "asn_block",
                     "account_id": account_id,
                     "asn": account.proxy.asn,
                 },
+                db=db,
             )
             return None
 
@@ -185,10 +198,19 @@ class BaseTask:
             await redis.enqueue_job(next_task.task_type, task_id=next_task.id)
 
 
-async def _webhook(url: Optional[str], payload: dict, task_id: int = 0) -> None:
-    if not url:
+async def _webhook(url: Optional[str], payload: dict, task_id: int = 0, db=None) -> None:
+    """Queue the webhook; never deliver it inline.
+
+    This used to `await WebhookSender().send(...)`, whose backoff sums to 450 s, right
+    inside the job — so one unreachable receiver held the worker slot for seven and a
+    half minutes and a system webhook pointing at a name that did not resolve slowed the
+    whole fleet. Delivery and retries now live in the `deliver_webhook` worker.
+    """
+    if not url or db is None:
         return
-    await WebhookSender().send(delivery_id=task_id, url=url, payload=payload)
+    from app.services.webhook_queue import enqueue_webhook
+
+    await enqueue_webhook(db, url, payload)
 
 
 async def _read_budget_exceeded(redis, account_id: int, read_action: str) -> bool:
@@ -229,6 +251,8 @@ TARGET_KIND = {
     "resolve_username": "peer",
     "get_chat_info": "peer",
     "get_chat_history": "channel",
+    "get_chat_admins": "peer",
+    "get_dialogs": "account",
 }
 
 
@@ -250,12 +274,41 @@ async def _humanize_before(task_type: str, payload: dict) -> None:
     from app.services.humanizer import Humanizer
 
     h = Humanizer(clock=get_clock())
-    if task_type == "send_message":
-        await h.typing_delay(str(payload.get("text", "")))
-    elif task_type == "react":
+    # NB: send_message's typing delay is applied INSIDE its action (see
+    # humanize_typing_visible) so it can emit a real "typing…" indicator while the
+    # client is connected — doing it here would sleep the delay off-line and invisibly.
+    if task_type == "react":
         await h.reaction_delay()
     elif task_type in ("join_group", "invite_to_group"):
         await h.inter_action_delay()
+
+
+async def humanize_typing_visible(client, target, text: str) -> None:
+    """Show a real Telegram "typing…" indicator for the simulated typing duration.
+
+    Applied inside the send action (client connected) so the recipient actually sees
+    "typing…". Telegram auto-clears the typing action after ~5 s, so we re-emit it every
+    few seconds across the (Clock-scaled) typing time. Gated by HUMANIZE_ACTIONS; a
+    failure to send the indicator never blocks the real message.
+    """
+    if not get_settings().HUMANIZE_ACTIONS:
+        return
+    from pyrogram.enums import ChatAction
+
+    from app.services.humanizer import Humanizer
+
+    clock = get_clock()
+    total = Humanizer(clock=clock).typing_trace(str(text)).total_s
+    refresh = 4.0  # < Telegram's ~5 s typing-action expiry
+    remaining = total
+    while remaining > 0:
+        try:
+            await client.send_chat_action(target, ChatAction.TYPING)
+        except Exception:  # noqa: BLE001 — indicator is best-effort, never fatal
+            break
+        step = min(refresh, remaining)
+        await clock.sleep(step)
+        remaining -= step
 
 
 async def _consume_write_budget(redis, db, account, task_type: str):
@@ -419,6 +472,7 @@ async def run_task(
                 task.webhook_url,
                 {"event": "task_complete", "task_id": task.external_id, "result": result},
                 task.id,
+                db,
             )
             return result or {}
 
@@ -464,6 +518,7 @@ async def run_task(
                     "flood_until": until.isoformat(),
                 },
                 task.id,
+                db,
             )
             return {"flood_until": until.isoformat()}
 
@@ -493,6 +548,7 @@ async def run_task(
                     "reason": account.ban_reason,
                 },
                 task.id,
+                db,
             )
             return {"banned": True, "reason": account.ban_reason}
 
@@ -505,8 +561,16 @@ async def run_task(
                 task.webhook_url,
                 {"event": "task_failed", "task_id": task.external_id, "error_code": "PEER_ID_INVALID"},
                 task.id,
+                db,
             )
             return {"error": "peer_id_invalid"}
+
+        except tg.CONNECTION_ERRORS as e:
+            # The proxy exit is bad/unreachable (a known residential-IP failure mode),
+            # not a Telegram rejection. Rotate the account's proxy to another port in the
+            # sticky range and defer for a quick retry; the deferred-scheduler cron will
+            # re-run this same task through the fresh exit (FR: proxy auto-rotation).
+            return await _rotate_proxy_and_defer(db, redis, task, account, e)
 
         except Exception as e:  # noqa: BLE001 — last-resort failure path
             task.status = TaskStatus.FAILED
@@ -516,11 +580,68 @@ async def run_task(
                 task.webhook_url,
                 {"event": "task_failed", "task_id": task.external_id, "error_code": task.error_code},
                 task.id,
+                db,
             )
             return {"error": str(e)}
 
         finally:
             await BaseTask.enqueue_next(account.id, db, redis)
+
+
+async def _rotate_proxy_and_defer(db, redis, task, account, exc) -> dict:
+    """Swap the account's proxy to another sticky port and defer the task for retry.
+
+    Bounded by PROXY_MAX_ROTATIONS rotations (tracked on task.retry_count); once the cycle
+    is exhausted the task is deferred for a longer cooldown and the counter reset, so a
+    real provider outage is retried periodically rather than hammered.
+    """
+    settings = get_settings()
+    proxy = account.proxy
+    old_url = proxy.url if proxy else None
+
+    if proxy is None or old_url is None:
+        # No proxy to rotate; fall back to a plain failure.
+        task.status = TaskStatus.FAILED
+        task.error_code = type(exc).__name__
+        await db.commit()
+        return {"error": str(exc)}
+
+    task.retry_count = (task.retry_count or 0) + 1
+    exhausted = task.retry_count > settings.PROXY_MAX_ROTATIONS
+
+    new_url = ProxyManager().rotate_port(old_url)
+    proxy.url = new_url
+
+    if exhausted:
+        backoff = settings.PROXY_ROTATE_COOLDOWN_SECONDS
+        task.retry_count = 0          # reset so the next cycle starts fresh
+        outcome = "cooldown"
+    else:
+        backoff = settings.PROXY_ROTATE_BACKOFF_SECONDS
+        outcome = "rotated"
+
+    until = _now() + timedelta(seconds=backoff)
+    task.status = TaskStatus.DEFERRED
+    task.deferred_until = until
+    task.error_code = "PROXY_ROTATED"
+
+    old_port = old_url.rpartition(":")[2]
+    new_port = new_url.rpartition(":")[2]
+    await telemetry.record_for_account(
+        db, account,
+        event_type=telemetry.PROXY_ROTATE,
+        action_type=task.task_type,
+        cause=f"{type(exc).__name__}:{old_port}->{new_port}",
+        outcome=outcome,
+        warmup_params=_warmup_snapshot(account),
+    )
+    await db.commit()
+    logger.warning(
+        "proxy_rotated account=%s task=%s %s->%s (%s) retry_in=%ss cause=%s",
+        account.id, task.id, old_port, new_port, outcome, backoff, type(exc).__name__,
+    )
+    return {"proxy_rotated": True, "from_port": old_port, "to_port": new_port,
+            "deferred_until": until.isoformat()}
 
 
 def _peer_id_invalid_types():

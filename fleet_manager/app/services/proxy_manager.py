@@ -19,12 +19,12 @@ class ProxyManager:
 
     def country_from_login_hint(self, url: str) -> Optional[str]:
         """Some residential providers encode the exit country in the proxy login,
-        e.g. proxy `<login>__cr.us`. Returns an ISO-3166 alpha-2 or None."""
+        e.g. our proxy provider's `<login>__cr.us`. Returns an ISO-3166 alpha-2 or None."""
         _h, _p, username, _pw = self.parse_proxy_url(url)
         if username and "__cr." in username:
             tail = username.split("__cr.", 1)[1]
-            # the country is the leading token; the provider appends params after it with
-            # either '.' or ';' (e.g. "ru;sessttl.10"), so split on both.
+            # the country is the leading token; the provider appends params after it
+            # with either '.' or ';' (e.g. "ru;sessttl.10"), so split on both.
             cc = tail.replace("_", ".").replace(";", ".").split(".")[0]
             if len(cc) == 2 and cc.isalpha():
                 return cc.upper()
@@ -60,6 +60,41 @@ class ProxyManager:
             host, port = host_port.rsplit(":", 1)
             return host, int(port), None, None
         return host_port, 8080, None, None
+
+    def rotate_port(
+        self,
+        url: str,
+        lo: Optional[int] = None,
+        hi: Optional[int] = None,
+        exclude: Optional[set[int]] = None,
+    ) -> str:
+        """Return `url` with its trailing `:port` swapped for a different port in
+        [lo, hi]. Only the port changes — the host/login (which carries the exit
+        country, e.g. `__cr.kz`) is preserved, so geo coherence is unaffected. Returns
+        the original url unchanged if it has no numeric port or no alternative exists.
+        """
+        import random
+
+        settings = get_settings()
+        lo = settings.PROXY_STICKY_PORT_MIN if lo is None else lo
+        hi = settings.PROXY_STICKY_PORT_MAX if hi is None else hi
+
+        base, sep, cur = url.rpartition(":")
+        if not sep:
+            return url
+        try:
+            cur_port = int(cur)
+        except ValueError:
+            return url
+
+        skip = set(exclude or ())
+        skip.add(cur_port)
+        choices = [p for p in range(lo, hi + 1) if p not in skip]
+        if not choices:  # everything excluded — allow any port but the current one
+            choices = [p for p in range(lo, hi + 1) if p != cur_port]
+        if not choices:
+            return url
+        return f"{base}:{random.choice(choices)}"
 
     async def geo_validate(
         self, url: str, phone_country: str, db

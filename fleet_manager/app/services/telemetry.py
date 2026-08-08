@@ -23,6 +23,7 @@ SLEEPING = "sleeping"
 BANNED = "banned"
 ACTION = "action"
 SURVIVAL_TICK = "survival_tick"
+PROXY_ROTATE = "proxy_rotate"
 
 
 async def record(

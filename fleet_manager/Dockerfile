@@ -20,9 +20,11 @@ RUN uv pip install --system -e ".[dev]"
 COPY app/ app/
 COPY data/ data/
 COPY migrations/ migrations/
-# seed_accounts.py imports the app's models and must run inside the instance
-# network, since postgres is never published to the host. It is therefore
-# invoked with `compose run` against this image and has to ship inside it.
+COPY config/ config/
+# seed_accounts.py / provision_client.py etc. import the app's models and must
+# run inside the instance network, since postgres is never published to the
+# host. They are therefore invoked with `compose run` against this image and
+# have to ship inside it.
 COPY scripts/ scripts/
 
 EXPOSE 8000

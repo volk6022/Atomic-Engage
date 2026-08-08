@@ -13,6 +13,9 @@ from app.workers.invite_to_group import invite_to_group
 from app.workers.warmup_action import warmup_action
 from app.workers.get_chat_info import get_chat_info
 from app.workers.get_chat_history import get_chat_history
+from app.workers.get_chat_admins import get_chat_admins
+from app.workers.get_dialogs import get_dialogs
+from app.workers.deliver_webhook import deliver_webhook
 from app.workers.recovery import recover_orphaned_tasks, reenqueue_due_deferred
 
 logger = logging.getLogger(__name__)
@@ -26,6 +29,9 @@ FUNCTIONS = [
     warmup_action,
     get_chat_info,
     get_chat_history,
+    get_chat_admins,
+    get_dialogs,
+    deliver_webhook,
 ]
 
 settings = get_settings()

@@ -24,6 +24,7 @@ def _make_account(
     proxy_country="RU",
     use_case="reactions",
     warmup_tier="ready",
+    geo_override=False,
 ):
     proxy = MagicMock()
     proxy.country = proxy_country
@@ -36,6 +37,9 @@ def _make_account(
     # warmup gate reads these; a `ready` reactions account may send_message
     account.use_case = use_case
     account.warmup_tier = warmup_tier
+    # A MagicMock attribute is truthy, so the geo-override branch would be taken
+    # by accident; the double has to state the default explicitly.
+    account.geo_override = geo_override
     return account
 
 

@@ -45,13 +45,34 @@ class GetChatInfoPayload(BaseModel):
 
 
 class GetChatHistoryPayload(BaseModel):
-    """Read-only last-N public posts (§3.3). `limit` hard-capped at 50."""
+    """Read-only last-N public posts (§2 contract). `limit` capped at 1000 — kurigram
+    chunks internally by 100, so a large limit is its own bookkeeping, not 1000 calls
+    of ours. `max_id` pages backward through history (id <= max_id, inclusive on the
+    kurigram side); `min_id` polls forward from a last-seen cursor (id >= min_id).
+    `offset_id` is deprecated: the worker translates it to `max_id` and logs a warning,
+    it is kept here only for backward-compatible callers."""
     username: Optional[str] = None
     peer_id: Optional[int] = None
-    limit: int = Field(default=30, ge=1, le=50)
+    limit: int = Field(default=30, ge=1, le=1000)
     min_date: Optional[str] = None
+    offset_date: Optional[str] = None
     min_id: Optional[int] = None
+    max_id: Optional[int] = None
     offset_id: Optional[int] = None
+
+
+class GetChatAdminsPayload(BaseModel):
+    """Read-only creator + administrators of a chat (§3 contract) — lets Radar avoid
+    ever messaging a channel's admins/moderators."""
+    username: Optional[str] = None
+    peer_id: Optional[int] = None
+
+
+class GetDialogsPayload(BaseModel):
+    """Read-only list of chats the account is a member of (§4 contract), for building
+    the account × channel matrix. `chat_types` filters client-side; omit for all types."""
+    limit: int = Field(default=200, ge=1)
+    chat_types: Optional[list[str]] = None
 
 
 class ActionRequest(BaseModel):
@@ -60,8 +81,9 @@ class ActionRequest(BaseModel):
         ...,
         description=(
             "Action type: send_message, join_group, react, resolve_username, "
-            "invite_to_group, get_chat_info, get_chat_history. The last three are "
-            "read-only research lookups (warmup-exempt, read-budget limited)."
+            "invite_to_group, get_chat_info, get_chat_history, get_chat_admins, "
+            "get_dialogs. The last five are read-only research lookups "
+            "(warmup-exempt, read-budget limited)."
         ),
     )
     payload: dict = Field(..., description="Action-specific payload")
@@ -91,6 +113,8 @@ async def create_action(
         "invite_to_group",
         "get_chat_info",
         "get_chat_history",
+        "get_chat_admins",
+        "get_dialogs",
     ]:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -115,13 +139,18 @@ async def create_action(
             detail=f"Account status is {account.status}",
         )
 
+    # No proxy => host IP mode; pass an empty proxy_country so the geo gate has nothing
+    # to compare against (the "XX" sentinel would read as a mismatch → SLEEPING). Mirrors
+    # the same fix in app/workers/base_task.prepare.
     validator = GeoMatchValidator()
     geo_result = validator.validate(
         phone_country=account.phone_country,
-        proxy_country=account.proxy.country if account.proxy else "XX",
+        proxy_country=account.proxy.country if account.proxy else "",
     )
 
-    if geo_result.risk == RiskLevel.CRITICAL:
+    if geo_result.risk == RiskLevel.CRITICAL and account.geo_override:
+        pass  # acknowledged at onboarding; the worker logs each occurrence
+    elif geo_result.risk == RiskLevel.CRITICAL:
         account.status = AccountStatus.SLEEPING
         await db.commit()
 

@@ -1,20 +1,38 @@
-"""get_chat_history — last N posts of a PUBLIC channel (§3.3, §9.2.1).
+"""get_chat_history — last N posts of a PUBLIC channel (§1-§2 contract, §3.3, §9.2.1).
 
-Public channels are readable without joining. Returns recency + content signals +
-contacts swept from each post. `limit` is hard-capped at 50; `min_date` (ISO) and
-`min_id` (last-seen cursor for incremental polling) both early-stop the descending
-scan. Warmup-exempt, read-budget limited (heaviest read -> smallest budget).
+Public channels are readable without joining. Returns recency + content signals,
+author/thread fields (§1), and contacts swept from each post. `limit` is capped at
+1000 (§2) — kurigram internally chunks by 100, so a large limit is its own internal
+bookkeeping, not 1000 calls of ours. `min_date` (ISO) early-stops the descending scan.
+Warmup-exempt, read-budget limited (heaviest read -> smallest budget, see
+safety_defaults.READ_LIMITS).
+
+Pagination (§2): kurigram marks `offset_id` deprecated and unconditionally overwrites
+it inside `Client.get_chat_history` (`offset_id = max_id if max_id else 0` when not
+reversed), so paging by `offset_id` alone silently returned the same page every time —
+confirmed by a live run where five pages with different offset_id came back identical.
+`max_id` (page backward through history) and `min_id` (poll forward from a cursor) are
+the real cursors and are forwarded to kurigram as-is: both are inclusive on the
+kurigram side (it internally does `min_id - 1` / `max_id + 1`), so callers page
+backward with `max_id = min(ids of the previous page) - 1` without any extra
+off-by-one on our end. `offset_id` is still accepted for backward compatibility and
+translated to `max_id` with a logged warning, but is NEVER forwarded to kurigram
+itself — passing it at all (even as None is fine, but any non-None value) re-triggers
+kurigram's own deprecation warning on every single call.
 """
+import logging
 from datetime import datetime, timezone
 
 from app.workers import _tg_errors as tg
-from app.workers._read_helpers import build_post
+from app.workers._read_helpers import build_post, not_found_reason
 from app.workers.base_task import run_task
 
-_MAX_LIMIT = 50
+logger = logging.getLogger(__name__)
+
+_MAX_LIMIT = 1000
 
 
-def _parse_min_date(raw):
+def _parse_iso(raw):
     if not raw:
         return None
     try:
@@ -24,32 +42,51 @@ def _parse_min_date(raw):
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def _effective_max_id(payload: dict, task_id: int) -> int:
+    """Resolve the backward-paging cursor: `max_id` wins when both are set; a legacy
+    `offset_id` is translated into `max_id` (with a warning) rather than forwarded to
+    kurigram, which would otherwise re-log its own deprecation warning per call."""
+    max_id = int(payload.get("max_id") or 0)
+    offset_id = payload.get("offset_id")
+    if offset_id:
+        logger.warning(
+            "get_chat_history task=%s: offset_id is deprecated, translating to max_id",
+            task_id,
+        )
+        if not max_id:
+            max_id = int(offset_id)
+    return max_id
+
+
 async def get_chat_history(ctx, task_id: int) -> dict:
     def builder(payload):
         async def action(client):
             chat_id = payload.get("username") or payload.get("peer_id")
             limit = min(int(payload.get("limit") or 30), _MAX_LIMIT)
-            offset_id = int(payload.get("offset_id") or 0)
+            max_id = _effective_max_id(payload, task_id)
             min_id = int(payload.get("min_id") or 0)
-            min_date = _parse_min_date(payload.get("min_date"))
+            min_date = _parse_iso(payload.get("min_date"))
+            offset_date = _parse_iso(payload.get("offset_date"))
+
+            history_kwargs = {"limit": limit, "max_id": max_id, "min_id": min_id}
+            if offset_date is not None:
+                history_kwargs["offset_date"] = offset_date
 
             posts: list[dict] = []
             try:
-                async for m in client.get_chat_history(
-                    chat_id, limit=limit, offset_id=offset_id
-                ):
-                    # History is newest-first: once we cross either cursor, stop.
-                    if min_id and getattr(m, "id", 0) <= min_id:
-                        break
+                async for m in client.get_chat_history(chat_id, **history_kwargs):
+                    # History is newest-first; max_id/min_id are already applied by
+                    # kurigram itself, only the min_date cursor needs an early exit.
                     mdate = getattr(m, "date", None)
                     if min_date and mdate is not None and mdate < min_date:
                         break
                     posts.append(build_post(m))
-            except tg.NOT_FOUND_ERRORS:
-                return None  # not a public/readable channel -> clean "no data"
+            except tg.NOT_FOUND_ERRORS as e:
+                return {"found": False, "reason": not_found_reason(e)}
 
             dates = [p["date"] for p in posts if p["date"]]
             return {
+                "found": True,
                 "count": len(posts),
                 "newest_date": max(dates) if dates else None,
                 "oldest_date": min(dates) if dates else None,

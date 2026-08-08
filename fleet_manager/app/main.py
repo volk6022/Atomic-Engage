@@ -4,7 +4,15 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.core import logging as app_logging
 from app.core import safety_config
-from app.api.v1 import actions, fleet, accounts, proxies, api_credentials, admin
+from app.api.v1 import (
+    actions,
+    fleet,
+    accounts,
+    proxies,
+    api_credentials,
+    admin,
+    tasks,
+)
 
 
 @asynccontextmanager
@@ -89,6 +97,7 @@ def create_app() -> FastAPI:
     app.include_router(actions.router)
     app.include_router(fleet.router)
     app.include_router(accounts.router)
+    app.include_router(tasks.router)
     app.include_router(proxies.router)
     app.include_router(api_credentials.router)
     app.include_router(admin.router)

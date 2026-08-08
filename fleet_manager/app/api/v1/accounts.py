@@ -6,6 +6,7 @@ Android fingerprint as a fallback. Geo coherence (phone country vs proxy exit co
 is enforced before any row is persisted; the whole operation is one transaction so a
 geo-mismatch creates nothing.
 """
+import logging
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, status
@@ -21,6 +22,8 @@ from app.services import telemetry
 from app.services.fingerprint import DeviceFingerprintGenerator
 from app.services.geo_match import GeoMatchValidator, RiskLevel
 from app.services.proxy_manager import ProxyManager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/accounts", tags=["accounts"])
 
@@ -46,6 +49,13 @@ class OnboardRequest(BaseModel):
     work_start: int = 8
     work_end: int = 22
     cohort: Optional[str] = Field(default=None, description="experiment cohort label (FR-143)")
+    allow_geo_mismatch: bool = Field(
+        default=False,
+        description=(
+            "Accept a phone/proxy country divergence for THIS account. The proxy row "
+            "still records its real exit country; the account carries the acknowledgement."
+        ),
+    )
     # Imported-session identity (FR-146) — preserve original fingerprint + api_id.
     api_id: Optional[int] = None
     api_hash: Optional[str] = None
@@ -123,13 +133,19 @@ async def create_account(request: OnboardRequest, db: deps.GetDB, api_key: deps.
         )
 
     geo = GeoMatchValidator().validate(phone_country=phone_country, proxy_country=proxy_country)
-    if geo.risk == RiskLevel.CRITICAL:
+    if geo.risk == RiskLevel.CRITICAL and not request.allow_geo_mismatch:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
                 f"geo_mismatch: phone {phone_country} != proxy {proxy_country}. "
-                "Account not created."
+                "Account not created. Pass allow_geo_mismatch=true to accept it."
             ),
+        )
+    geo_override = geo.risk == RiskLevel.CRITICAL and request.allow_geo_mismatch
+    if geo_override:
+        logger.warning(
+            "geo_mismatch_accepted phone_country=%s proxy_country=%s",
+            phone_country, proxy_country,
         )
 
     cred = await _select_api_credential(db, request)
@@ -175,6 +191,7 @@ async def create_account(request: OnboardRequest, db: deps.GetDB, api_key: deps.
         work_start=request.work_start,
         work_end=request.work_end,
         cohort=request.cohort,
+        geo_override=geo_override,
         first_seen_at=get_clock().now(),   # survival window opens here (FR-143)
     )
     db.add(account)
@@ -191,7 +208,7 @@ async def create_account(request: OnboardRequest, db: deps.GetDB, api_key: deps.
         "account_id": account_id,
         "phone_country": phone_country,
         "proxy_country": proxy_country,
-        "geo_status": "OK",
+        "geo_status": "OVERRIDDEN" if geo_override else "OK",
         "device_fingerprint": {
             "device_model": fp.device_model,
             "system_version": fp.system_version,
@@ -202,16 +219,7 @@ async def create_account(request: OnboardRequest, db: deps.GetDB, api_key: deps.
     }
 
 
-@router.get("/{account_id}")
-async def get_account(account_id: int, db: deps.GetDB, api_key: deps.VerifyAPIKey):
-    account = (
-        await db.execute(
-            select(Account).options(selectinload(Account.proxy)).where(Account.id == account_id)
-        )
-    ).scalar_one_or_none()
-    if not account:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
-
+def _account_view(account: Account) -> dict:
     return {
         "account_id": account.id,
         "phone": account.phone,
@@ -229,6 +237,32 @@ async def get_account(account_id: int, db: deps.GetDB, api_key: deps.VerifyAPIKe
         if account.proxy
         else None,
     }
+
+
+@router.get("/")
+async def list_accounts(db: deps.GetDB, api_key: deps.VerifyAPIKey):
+    """The whole fleet in one call. `GET /v1/accounts/{id}` could only be used by a
+    caller that already knew the ids, so an operator UI had no way to enumerate the
+    fleet without reading the instance's database directly."""
+    rows = (
+        await db.execute(
+            select(Account).options(selectinload(Account.proxy)).order_by(Account.id)
+        )
+    ).scalars().all()
+    return {"count": len(rows), "accounts": [_account_view(a) for a in rows]}
+
+
+@router.get("/{account_id}")
+async def get_account(account_id: int, db: deps.GetDB, api_key: deps.VerifyAPIKey):
+    account = (
+        await db.execute(
+            select(Account).options(selectinload(Account.proxy)).where(Account.id == account_id)
+        )
+    ).scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    return _account_view(account)
 
 
 @router.put("/{account_id}/proxy")

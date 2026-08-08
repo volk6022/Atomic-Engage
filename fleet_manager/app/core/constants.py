@@ -25,6 +25,8 @@ class TaskType(StrEnum):
     WARMUP_ACTION = "warmup_action"
     GET_CHAT_INFO = "get_chat_info"
     GET_CHAT_HISTORY = "get_chat_history"
+    GET_CHAT_ADMINS = "get_chat_admins"
+    GET_DIALOGS = "get_dialogs"
 
 
 # Read-only research lookups (docs/research-agent-actions.md §4.1): public-entity
@@ -35,6 +37,8 @@ READ_ACTIONS = frozenset(
         TaskType.RESOLVE_USERNAME,
         TaskType.GET_CHAT_INFO,
         TaskType.GET_CHAT_HISTORY,
+        TaskType.GET_CHAT_ADMINS,
+        TaskType.GET_DIALOGS,
     }
 )
 

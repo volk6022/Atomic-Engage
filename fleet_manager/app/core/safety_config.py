@@ -53,6 +53,28 @@ def _defaults() -> dict:
     }
 
 
+def _merge_dict(base: dict, override: dict) -> dict:
+    """Shallow-merge `override` onto a copy of `base`, key by key.
+
+    A key present in `base` but absent from `override` survives untouched — the whole
+    point of this function. Plain `cfg[section] = data[section]` (the old behaviour)
+    instead REPLACED the section wholesale, so a yaml that only mentions one key
+    silently deleted every other key that section used to have (e.g. `service_testing`
+    disappearing from `rate_limits` because the checked-in yaml predates that
+    use_case). Non-dict values just overwrite, same as a normal `dict.update`.
+    """
+    if not isinstance(override, dict):
+        return override
+    merged = dict(base)
+    for key, value in override.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _merge_dict(existing, value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def _load_from_disk() -> tuple[dict, str]:
     cfg = _defaults()
     path = _config_path()
@@ -66,16 +88,21 @@ def _load_from_disk() -> tuple[dict, str]:
     except Exception as exc:  # noqa: BLE001 — bad config must never crash a worker
         logger.error("safety_config_load_failed path=%s err=%s; using defaults", path, exc)
         return cfg, "defaults(load_error)"
-    if isinstance(data.get("warmup_schedules"), dict) and data["warmup_schedules"]:
-        cfg["warmup_schedules"] = data["warmup_schedules"]
-    if isinstance(data.get("rate_limits"), dict) and data["rate_limits"]:
-        cfg["rate_limits"] = data["rate_limits"]
-    if isinstance(data.get("read_limits"), dict) and data["read_limits"]:
-        cfg["read_limits"] = data["read_limits"]
-    if isinstance(data.get("rate_limit_profiles"), dict) and data["rate_limit_profiles"]:
-        cfg["rate_limit_profiles"] = data["rate_limit_profiles"]
-    if isinstance(data.get("premium_ceilings"), dict) and data["premium_ceilings"]:
-        cfg["premium_ceilings"] = data["premium_ceilings"]
+    # Merge onto the defaults PER KEY (see _merge_dict) rather than replacing each
+    # section wholesale: a yaml that only overrides one use_case/action must not erase
+    # every other one that only exists in code (defaults are the floor, not optional).
+    # rate_limit_profiles is a dict of dicts (profile -> use_case -> caps), so it needs
+    # the same key-wise treatment two levels deep; _merge_dict already recurses for that.
+    for section in (
+        "warmup_schedules",
+        "rate_limits",
+        "read_limits",
+        "rate_limit_profiles",
+        "premium_ceilings",
+    ):
+        override = data.get(section)
+        if isinstance(override, dict) and override:
+            cfg[section] = _merge_dict(cfg[section], override)
     return cfg, str(path)
 
 
@@ -143,4 +170,8 @@ def active_summary() -> dict:
         "use_cases": sorted(ws.keys()),
         "warmup_totals": {uc: v.get("total_days") for uc, v in ws.items()},
         "rate_limit_use_cases": sorted(cfg["rate_limits"].keys()),
+        # Effective read caps, verbatim. The summary used to name only the write-side
+        # use_cases, so the one number an operator most often needs to confirm after a
+        # reload -- "did my read budget actually take?" -- was unanswerable over the API.
+        "read_limits": dict(cfg["read_limits"]),
     }

@@ -1,4 +1,8 @@
 dump.rdb
+logs/
+.venv/
+*.session
+*.session-journal
 
 # Per-client rendered instances hold secrets (.env: POSTGRES_PASSWORD, API_KEY).
 # Never commit client instance dirs. Keep the folder placeholder only.

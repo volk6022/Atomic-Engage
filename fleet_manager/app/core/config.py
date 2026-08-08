@@ -25,6 +25,19 @@ class Settings(BaseSettings):
     # the inter-action floor (60-300 virtual s) doesn't sleep real minutes at scale 1.
     HUMANIZE_ACTIONS: bool = Field(default=True)
 
+    # Proxy port auto-rotation: residential/sticky providers (e.g. puls-proxy) expose a
+    # block of ports that all map to the same exit pool; when a sticky IP goes bad the
+    # connection just times out. On a connection/proxy error the worker swaps the
+    # account's proxy to another port in [MIN, MAX] (same login => same exit country)
+    # and re-runs the task after a short backoff, up to MAX_ROTATIONS times.
+    PROXY_STICKY_PORT_MIN: int = Field(default=11000)
+    PROXY_STICKY_PORT_MAX: int = Field(default=11019)
+    PROXY_ROTATE_BACKOFF_SECONDS: int = Field(default=20)
+    PROXY_MAX_ROTATIONS: int = Field(default=6)
+    # When all rotations within a cycle are exhausted, defer this long before trying the
+    # whole port range again (a real provider outage shouldn't be hammered).
+    PROXY_ROTATE_COOLDOWN_SECONDS: int = Field(default=1800)
+
     def validate(self) -> None:
         if not self.N8N_SYSTEM_WEBHOOK_URL:
             raise RuntimeError(

@@ -5,7 +5,10 @@ description = "Telegram Fleet Orchestrator - Stateless task queue system for up 
 requires-python = ">=3.11"
 dependencies = [
     "kurigram>=2.2.19",
-    "TgCrypto",
+    # kurigram hardcodes `import tgcrypto` for fast MTProto crypto. The stock `TgCrypto`
+    # has no wheels for recent CPython on Windows (needs a C compiler); tgcrypto-pyrofork
+    # ships prebuilt wheels and installs as the same importable `tgcrypto` module.
+    "tgcrypto-pyrofork>=1.2.8",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.10.0",
@@ -22,10 +25,6 @@ dependencies = [
     "python-multipart>=0.0.20",
     "structlog>=24.4.0",
     "psutil>=7.2.2",
-    "pyqt5-qt5==5.15.2",
-    "pyqt5-sip>=12.11",
-    "opentele==1.15.1",
-    "pyqt5==5.15.9",
     "pyyaml>=6.0.3",
 ]
 
@@ -36,6 +35,15 @@ dev = [
     "pytest-cov>=6.0.0",
     "factory-boy",
     "respx>=0.22.0",
+]
+# Only needed by scripts/tdata_to_session.py (Telegram Desktop tdata -> session string).
+# Heavy GUI deps that aren't used by the runtime, so they're opt-in for deploy:
+#   uv sync --extra import-tools
+import-tools = [
+    "pyqt5-qt5==5.15.2",
+    "pyqt5-sip>=12.11",
+    "pyqt5==5.15.9",
+    "opentele==1.15.1",
 ]
 
 [build-system]
