@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 # inline closure (US2; SC).
 MEMORY_RESTART_THRESHOLD = 85.0
 
+# How long a watcher whose shard is empty waits before looking again. Long enough that
+# an idle process costs nothing, short enough that a newly onboarded account starts
+# being watched within a minute.
+EMPTY_SHARD_RECHECK_SECONDS = 60
+
 
 def memory_over_threshold(threshold: float = MEMORY_RESTART_THRESHOLD) -> bool:
     """True when host memory usage exceeds `threshold` percent."""
@@ -49,12 +54,23 @@ async def main():
 
     rotation_mgr = WatcherRotationManager(process_id, total_processes)
 
+    # An empty shard is normal, not a reason to die. With fewer active accounts than
+    # watcher processes some shards are simply empty, and exiting turned
+    # `restart: unless-stopped` into a crash loop -- observed on two production
+    # instances that have one account against four watchers. Wait and re-check
+    # instead: an account onboarded later lands in a shard whose process is already
+    # up, and picks it up on the next sweep without anyone restarting anything.
     async with session_maker() as db:
         account_ids = await rotation_mgr.on_startup(db)
 
-    if not account_ids:
-        logger.warning("no_active_accounts")
-        return
+    while not account_ids:
+        logger.info(
+            "no_accounts_in_shard process=%s/%s; re-checking in %ss",
+            process_id, total_processes, EMPTY_SHARD_RECHECK_SECONDS,
+        )
+        await asyncio.sleep(EMPTY_SHARD_RECHECK_SECONDS)
+        async with session_maker() as db:
+            account_ids = await rotation_mgr.on_startup(db)
 
     clients = []
 
