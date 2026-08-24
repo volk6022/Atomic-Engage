@@ -110,9 +110,36 @@ def test_c8_peer_access_hash_has_composite_pk_account_and_peer():
 
 # --- C9 / FR-110: warmup totals must match data-model §9 ---------------------------
 def test_c9_warmup_schedule_totals_match_data_model():
+    """Суммы дней прогрева обязаны совпадать с data-model §9 (FR-110).
+
+    Проверяются только **лестничные** профили — те, у которых ban-safety держится на
+    постепенном наборе действий. Профиль, объявивший себя нелестничным, обязан быть
+    перечислен в `LADDERLESS` явно, с причиной: молчаливое исключение по признаку
+    «ноль дней» позволило бы завести боевой профиль без прогрева и не заметить этого.
+
+    `service_testing` — стендовый профиль: ноль дней на всех ступенях, каждая ступень
+    разрешает всё, а безопасность держится на суточных каптчах. Он помечен в коде как
+    негодный для боевой рассылки. В data-model §9 его нет, и **вопрос о том, узаконить
+    его там или убрать из кода, остаётся открытым** — он записан первым в списке
+    вопросов к Ивану в `qa-audit-2026-08/README.md`. До ответа он живёт здесь как
+    названное исключение, а не как красный тест: постоянно красный тест перестают
+    читать через неделю.
+
+    `public_reply` исключением НЕ является: это обычный лестничный профиль на 14 дней,
+    и он добавлен в ожидаемые суммы. Появится в data-model §9 — сойдётся и там.
+    """
     warmup = importlib.import_module("app.services.warmup")
-    schedules = warmup.WARMUP_SCHEDULES
-    expected_totals = {"reactions": 7, "join_groups": 14, "cold_dm": 30, "inviting": 45}
+
+    # Нелестничные профили: имя → почему. Пустая причина недопустима.
+    LADDERLESS = {
+        "service_testing": "стендовый профиль, безопасность на суточных каптчах; "
+                           "открытый вопрос №1 QA-аудита",
+    }
+
+    schedules = {uc: cfg for uc, cfg in warmup.WARMUP_SCHEDULES.items()
+                 if uc not in LADDERLESS}
+    expected_totals = {"reactions": 7, "join_groups": 14, "cold_dm": 30,
+                       "inviting": 45, "public_reply": 14}
 
     def total_days(use_case_cfg) -> int:
         # Support both the (correct) per-tier 'days' model and any cumulative variant.
