@@ -1,5 +1,5 @@
 import uuid
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 
@@ -19,7 +19,29 @@ class SendMessagePayload(BaseModel):
 
 
 class JoinGroupPayload(BaseModel):
-    invite_link: str = Field(..., description="Telegram invite link")
+    """Join by invite link OR by public @username / t.me link.
+
+    NOTE: the `*Payload` models in this module are DOCUMENTATION, not enforcement.
+    `ActionRequest.payload` is a plain `dict` and nothing validates it per action, so
+    these classes describe the contract and are exercised only by the contract tests.
+    Do not read a field here as a guarantee the gateway rejects anything else.
+
+    `invite_link` was the sole, required field, which described the worker inaccurately:
+    it has always done `payload.get("invite_link") or payload.get("target")`, and
+    kurigram's `join_chat` takes a username just as happily as an invite hash. A public
+    discussion group has a username and usually no invite link at all, so the schema as
+    written documented the one case that does NOT apply to public comments.
+    """
+
+    invite_link: Optional[str] = Field(default=None, description="Telegram invite link")
+    target: Optional[str] = Field(
+        default=None, description="@username, t.me link, or chat id")
+
+    @model_validator(mode="after")
+    def one_of(self):
+        if not self.invite_link and not self.target:
+            raise ValueError("join_group needs invite_link or target")
+        return self
 
 
 class ReactPayload(BaseModel):

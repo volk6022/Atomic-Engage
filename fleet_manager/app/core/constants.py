@@ -48,6 +48,11 @@ class UseCase(StrEnum):
     JOIN_GROUPS = "join_groups"
     COLD_DM = "cold_dm"
     INVITING = "inviting"
+    # Public replies in a channel's discussion group. Needs BOTH join_group (the
+    # comments live in a linked group the account must be a member of) and
+    # send_message (the reply itself). No existing profile grants both: cold_dm can
+    # message but never joins, join_groups joins but its messages_per_day is 0.
+    PUBLIC_REPLY = "public_reply"
     # Bench profile for exercising the fleet end to end: nominal 1000/day on every
     # per-use-case axis so budgets never mask what is being tested. NOT for real
     # outreach -- these caps are far above anything Telegram tolerates sustained.

@@ -42,7 +42,11 @@ class OnboardRequest(BaseModel):
     phone: str
     session_string: str
     proxy_url: str
-    use_case: Literal["reactions", "join_groups", "cold_dm", "inviting"]
+    # Listed explicitly rather than taken from UseCase: `service_testing` is a bench
+    # profile with 1000/day on every axis, and onboarding a real account into it would
+    # be a foot-gun. Its absence here is deliberate, not drift — add new outreach
+    # use-cases to this list, never widen it to the whole enum.
+    use_case: Literal["reactions", "join_groups", "cold_dm", "inviting", "public_reply"]
     proxy_country: Optional[str] = Field(default=None, description="ISO-3166 alpha-2; else GeoIP/login hint")
     proxy_type: Literal["mobile_4g", "residential", "datacenter"] = "residential"
     tz_offset: Optional[int] = None
