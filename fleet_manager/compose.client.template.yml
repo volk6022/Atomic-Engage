@@ -47,6 +47,15 @@ services:
       redis:
         condition: service_healthy
     volumes:
+      # Ban-safety config, mounted rather than baked in. The file calls itself
+      # HOT-RELOADABLE ("edit and POST /v1/admin/reload-safety"), but the Dockerfile
+      # COPYs config/ into the image, so in production a limit change still needed a
+      # rebuild -- the promise was half true. Mounted here it is true.
+      # Only the processes that READ it get the mount: gateway (warmup gate) and the
+      # workers (daily budgets). Watchers never touch safety config.
+      # NOTE: reload is per-process and in-memory. One POST hits ONE container; the
+      # workers keep their old copy until they are reloaded or restarted too.
+      - ${SAFETY_CONFIG_FILE:-../../config/safety.yaml}:/app/config/safety.yaml:ro
       - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro
       - ./GeoLite2-ASN.mmdb:/app/GeoLite2-ASN.mmdb:ro
     restart: unless-stopped
@@ -70,6 +79,15 @@ services:
       redis:
         condition: service_healthy
     volumes:
+      # Ban-safety config, mounted rather than baked in. The file calls itself
+      # HOT-RELOADABLE ("edit and POST /v1/admin/reload-safety"), but the Dockerfile
+      # COPYs config/ into the image, so in production a limit change still needed a
+      # rebuild -- the promise was half true. Mounted here it is true.
+      # Only the processes that READ it get the mount: gateway (warmup gate) and the
+      # workers (daily budgets). Watchers never touch safety config.
+      # NOTE: reload is per-process and in-memory. One POST hits ONE container; the
+      # workers keep their old copy until they are reloaded or restarted too.
+      - ${SAFETY_CONFIG_FILE:-../../config/safety.yaml}:/app/config/safety.yaml:ro
       - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro
       - ./GeoLite2-ASN.mmdb:/app/GeoLite2-ASN.mmdb:ro
     restart: unless-stopped
@@ -86,6 +104,15 @@ services:
       redis:
         condition: service_healthy
     volumes:
+      # Ban-safety config, mounted rather than baked in. The file calls itself
+      # HOT-RELOADABLE ("edit and POST /v1/admin/reload-safety"), but the Dockerfile
+      # COPYs config/ into the image, so in production a limit change still needed a
+      # rebuild -- the promise was half true. Mounted here it is true.
+      # Only the processes that READ it get the mount: gateway (warmup gate) and the
+      # workers (daily budgets). Watchers never touch safety config.
+      # NOTE: reload is per-process and in-memory. One POST hits ONE container; the
+      # workers keep their old copy until they are reloaded or restarted too.
+      - ${SAFETY_CONFIG_FILE:-../../config/safety.yaml}:/app/config/safety.yaml:ro
       - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro
       - ./GeoLite2-ASN.mmdb:/app/GeoLite2-ASN.mmdb:ro
     restart: unless-stopped
