@@ -315,9 +315,35 @@ async def reactivate_account(
 
     pm = ProxyManager()
     proxy_country = pm.resolve_country(request.proxy_url, request.proxy_country)
-    geo = GeoMatchValidator().validate(phone_country=account.phone_country, proxy_country=proxy_country or "XX")
-    if geo.risk == RiskLevel.CRITICAL or not proxy_country:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="geo_mismatch or unknown proxy country")
+    # Two separate failures used to share one message ("geo_mismatch or unknown proxy
+    # country"), which sends the reader hunting the wrong one. Say which it is.
+    if not proxy_country:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="cannot determine proxy country; pass proxy_country",
+        )
+
+    geo = GeoMatchValidator().validate(
+        phone_country=account.phone_country, proxy_country=proxy_country
+    )
+    if geo.risk == RiskLevel.CRITICAL and account.geo_override:
+        # Honoured here for the same reason as at dispatch (actions.py, workers/
+        # base_task.py): the divergence was acknowledged at onboarding. Without this
+        # branch the flag covers an account right up to the moment it needs waking, and
+        # then the only way back is an UPDATE by hand — which is how a whole fleet of
+        # deliberately geo-diverged accounts stayed asleep for five days.
+        logger.warning(
+            "geo_mismatch_overridden_on_reactivate account=%s phone=%s proxy=%s",
+            account.id, account.phone_country, proxy_country,
+        )
+    elif geo.risk == RiskLevel.CRITICAL:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"geo_mismatch: proxy {proxy_country} != account phone "
+                f"{account.phone_country} (set geo_override to allow this pairing)"
+            ),
+        )
 
     healthy = await pm.health_check(request.proxy_url)
     if not healthy:

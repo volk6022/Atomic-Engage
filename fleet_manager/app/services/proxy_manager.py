@@ -8,6 +8,11 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Consecutive failed checks before a proxy is believed dead. The loop runs every 5
+# minutes with a 10s timeout, so three strikes is a quarter hour of unreachability
+# rather than one connection that happened not to open.
+PROXY_FAIL_STRIKES = 3
+
 
 class ProxyManager:
     def __init__(self):
@@ -157,6 +162,15 @@ class ProxyManager:
         from app.db.models import Proxy, Account
         from app.db.redis_client import proxy_health_set
 
+        from app.core import logging as app_logging
+        from app.services import telemetry
+
+        log = app_logging.get_logger("proxy_health")
+
+        # Consecutive failures per proxy id. A proxy is only believed dead after
+        # PROXY_FAIL_STRIKES checks in a row.
+        strikes: dict[int, int] = {}
+
         while True:
             await asyncio.sleep(300)
 
@@ -164,32 +178,66 @@ class ProxyManager:
             result = await db.execute(stmt)
             proxies = result.scalars().all()
 
+            slept = 0
             for proxy in proxies:
                 is_healthy = await self.health_check(proxy.url)
                 await proxy_health_set(redis_conn, proxy.id, is_healthy)
 
-                if not is_healthy:
-                    stmt = select(Account).where(Account.proxy_id == proxy.id)
-                    result = await db.execute(stmt)
-                    account = result.scalar_one_or_none()
+                if is_healthy:
+                    strikes.pop(proxy.id, None)
+                    continue
 
-                    if account and account.status == "active":
-                        account.status = "sleeping"
-                        await db.commit()
+                strikes[proxy.id] = strikes.get(proxy.id, 0) + 1
+                n = strikes[proxy.id]
+                if n < PROXY_FAIL_STRIKES:
+                    # A single timeout is a blip, not an outage. Sleeping on the first
+                    # one is how five accounts went down for five days on a proxy that
+                    # was reachable the whole time either side of the check.
+                    log.warning("proxy_check_failed", proxy_id=proxy.id, strike=n,
+                                of=PROXY_FAIL_STRIKES)
+                    continue
 
-                        settings = get_settings()
+                # Not scalar_one_or_none: several accounts may share one proxy row, and
+                # that raised MultipleResultsFound — killing the loop for the whole fleet.
+                stmt = select(Account).where(Account.proxy_id == proxy.id)
+                accounts = (await db.execute(stmt)).scalars().all()
 
-                        from app.services.webhook_sender import WebhookSender
+                for account in accounts:
+                    if account.status != "active":
+                        continue
+                    account.status = "sleeping"
+                    # Without this the transition leaves no trace anywhere: the row
+                    # changes, nothing says why, and the next person reads a fleet that
+                    # went to sleep for no reason.
+                    await telemetry.record(
+                        db, event_type=telemetry.SLEEPING, account_id=account.id,
+                        cause=f"proxy_unreachable proxy_id={proxy.id} "
+                              f"strikes={n} url_host={proxy.url.rsplit('@', 1)[-1]}",
+                    )
+                    await db.commit()
+                    slept += 1
 
-                        await WebhookSender().send(
-                            delivery_id=0,
-                            url=settings.N8N_SYSTEM_WEBHOOK_URL,
-                            payload={
-                                "event": "proxy_fail_sleeping",
-                                "account_id": account.id,
-                                "failed_proxy_id": proxy.id,
-                                "reserve_available": False,
-                            },
-                        )
+                    log.warning("account_slept_proxy_unreachable",
+                                account_id=account.id, proxy_id=proxy.id, strikes=n)
 
-            logger.info(f"health_check_cycle proxies={len(proxies)}")
+                    settings = get_settings()
+
+                    from app.services.webhook_sender import WebhookSender
+
+                    await WebhookSender().send(
+                        delivery_id=0,
+                        url=settings.N8N_SYSTEM_WEBHOOK_URL,
+                        payload={
+                            "event": "proxy_fail_sleeping",
+                            "account_id": account.id,
+                            "failed_proxy_id": proxy.id,
+                            "reserve_available": False,
+                        },
+                    )
+
+            # Structured, not `logging.getLogger(__name__)`: the app configures structlog,
+            # so the stdlib logger this used to call was swallowed at root level. The loop
+            # ran for ten days without emitting one line, which is why nobody saw the fleet
+            # go down.
+            log.info("health_check_cycle", proxies=len(proxies),
+                     failing=len(strikes), slept=slept)
