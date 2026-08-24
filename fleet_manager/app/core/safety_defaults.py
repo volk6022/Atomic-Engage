@@ -55,6 +55,23 @@ WARMUP_SCHEDULES = {
             "ready":        {"days": 12, "actions": ["invite_to_group", "send_message"]},
         },
     },
+    # Public replies in a channel's discussion group. The ladder copies join_groups
+    # (14 days, a shape already run on live accounts) and differs in one place: the
+    # `ready` tier adds send_message, because this use-case has to keep joining new
+    # discussion groups AND post in them, while join_groups only ever joins.
+    #
+    # `cross_message_reply` is deliberately absent: it is a warmup-ladder concept, not
+    # an API action — the gateway whitelist has no such action. A public reply IS a
+    # send_message with reply_to_message_id into the discussion group.
+    "public_reply": {
+        "total_days": 14,
+        "tiers": {
+            "fresh":        {"days": 2, "actions": ["profile_setup", "read", "subscribe_channels"]},
+            "basic":        {"days": 4, "actions": ["react", "read", "subscribe_channels"]},
+            "intermediate": {"days": 4, "actions": ["join_group", "react", "read"]},
+            "ready":        {"days": 4, "actions": ["join_group", "react", "send_message"]},
+        },
+    },
     # Bench profile: zero-day tiers. A use-case absent from this map makes
     # advance_tier_if_due return None, so an account left in `warmup` would never
     # graduate; a zero budget promotes one tier per tick, reaching `ready` instead.
@@ -81,6 +98,12 @@ RATE_LIMITS = {
     "join_groups": {"reactions_per_day": 30, "messages_per_day": 0,  "joins_per_day": 5, "invites_per_day": 0,  "resolves_per_day": 100},
     "cold_dm":     {"reactions_per_day": 30, "messages_per_day": 20, "joins_per_day": 0, "invites_per_day": 0,  "resolves_per_day": 100},
     "inviting":    {"reactions_per_day": 30, "messages_per_day": 10, "joins_per_day": 3, "invites_per_day": 20, "resolves_per_day": 100},
+    # Public replies. Joins are the scarcer axis (3/d, below join_groups' 5) because
+    # this account also posts, and "joined ten groups today" is the pattern that gets
+    # looked at. Messages are half of cold_dm's 20: a public reply carries no
+    # message-to-non-contact signal, but it is visible to everyone in the group, so a
+    # repetitive one is easier for a human to notice and report than a cold DM is.
+    "public_reply": {"reactions_per_day": 30, "messages_per_day": 10, "joins_per_day": 3, "invites_per_day": 0,  "resolves_per_day": 100},
     # Bench profile — nominal ceilings so a budget never silently absorbs a test
     # result. Deliberately unsafe for real outreach; see UseCase.SERVICE_TESTING.
     "service_testing": {"reactions_per_day": 1000, "messages_per_day": 1000, "joins_per_day": 1000, "invites_per_day": 1000, "resolves_per_day": 1000},
@@ -97,6 +120,7 @@ RATE_LIMIT_PROFILES = {
         "join_groups": {"reactions_per_day": 200, "messages_per_day": 0,  "joins_per_day": 30, "invites_per_day": 0,  "resolves_per_day": 150},
         "cold_dm":     {"reactions_per_day": 150, "messages_per_day": 30, "joins_per_day": 0,  "invites_per_day": 0,  "resolves_per_day": 150},
         "inviting":    {"reactions_per_day": 150, "messages_per_day": 15, "joins_per_day": 20, "invites_per_day": 40, "resolves_per_day": 150},
+        "public_reply": {"reactions_per_day": 150, "messages_per_day": 20, "joins_per_day": 15, "invites_per_day": 0,  "resolves_per_day": 150},
         # Same nominal ceilings under `mature`: a missing use-case here resolves to
         # an empty dict and every cap reads 0, which would block the bench profile
         # entirely the moment the fleet is switched to this profile.

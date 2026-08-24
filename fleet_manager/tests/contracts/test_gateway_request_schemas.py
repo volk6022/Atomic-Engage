@@ -28,7 +28,18 @@ def test_join_group_payload_valid():
     assert payload.invite_link == "https://t.me/joinchat/test"
 
 
+def test_join_group_payload_accepts_a_public_username():
+    """A channel's discussion group has a @username and usually no invite link at all.
+    The worker has always accepted `target` (`invite_link or target` → `join_chat`);
+    the schema said otherwise and documented the one case that does not apply to
+    public comments."""
+    payload = JoinGroupPayload(target="@some_discussion_group")
+    assert payload.target == "@some_discussion_group"
+    assert payload.invite_link is None
+
+
 def test_join_group_payload_missing():
+    """Neither field is required on its own, but one of them is."""
     with pytest.raises(ValidationError):
         JoinGroupPayload()
 
