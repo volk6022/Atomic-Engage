@@ -616,6 +616,27 @@ Action was rejected due to geographic mismatch (phone country ≠ proxy country)
 }
 ```
 
+#### `geo_override` — how far the exemption reaches
+
+`geo_reject` is **not** emitted for an account whose `geo_override` flag is set. Know
+what that flag actually covers before you set it:
+
+| granted | applies |
+|---|---|
+| once, at onboarding, for one phone/proxy country pair | before **every** dispatched task, on every action submission, and again on reactivation |
+
+The wording ("this pairing is acknowledged") is narrower than the effect: a single
+acknowledgement keeps the account working for as long as it lives. That is deliberate,
+not an oversight — a country divergence risks the account itself and nobody else, and
+re-asking per task would either stall the fleet whenever no operator is around or train
+whoever is around to confirm without reading. Reviewed and kept, 2026-08-25.
+
+The exemption is loud, not silent: every occurrence writes
+`geo_mismatch_overridden account=… phone=… proxy=…` at WARNING. If you are auditing a
+fleet, that log line — not the absence of `geo_reject` — is where skipped gates show up.
+
+To withdraw the exemption, clear the flag; the gate resumes on the next dispatch.
+
 #### `flood_wait`
 Telegram rate-limited the account; must wait before next action.
 

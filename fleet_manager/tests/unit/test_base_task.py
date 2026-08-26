@@ -1,4 +1,6 @@
 """Unit tests for BaseTask.prepare() covering all early-return paths."""
+import logging
+
 import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -161,3 +163,38 @@ async def test_prepare_returns_account_dict_on_happy_path():
         result = await BaseTask.prepare({}, 1, db)
 
     assert result == {"account": account}
+
+
+@pytest.mark.asyncio
+async def test_prepare_honours_geo_override_on_every_dispatch(caplog):
+    """The override is deliberately wider than the pairing it was granted for.
+
+    Read literally, `geo_override` says "this phone country may be paired with this
+    proxy country", and it is set once, at onboarding. The gate it opens, however, is
+    re-run before EVERY dispatch and again on reactivation, so one acknowledgement
+    keeps the account running for the rest of its life. An audit raised that asymmetry
+    as a finding; it was reviewed and kept on purpose (owner's decision, 2026-08-25).
+
+    The reasoning, so the next audit does not reopen it: a country divergence puts the
+    account itself at risk and nobody else. Whoever accepted the pairing accepted the
+    work done over it. Re-asking per task would either stall the fleet on an absent
+    operator or train them to confirm without reading, and a prompt nobody reads is
+    worse protection than no prompt at all.
+
+    What the decision does not license is an *invisible* exemption. Hence the assertion
+    on the log line: it is the only trace that a gate was skipped for this account, and
+    a refactor that quietly drops it should fail here.
+    """
+    account = _make_account(phone_country="RU", proxy_country="US", geo_override=True)
+    db = _make_db(account=account)
+
+    with caplog.at_level(logging.WARNING, logger="app.workers.base_task"):
+        with patch("app.workers.base_task.working_hours.WorkingHoursGuard") as mock_guard:
+            mock_guard.return_value.check.return_value = (True, None)
+            result = await BaseTask.prepare({}, 1, db)
+
+    assert result == {"account": account}
+    assert account.status != AccountStatus.SLEEPING
+    db.commit.assert_not_awaited()
+    assert "geo_mismatch_overridden" in caplog.text
+    assert "RU" in caplog.text and "US" in caplog.text

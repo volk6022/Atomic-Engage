@@ -176,3 +176,29 @@ async def test_create_action_resolve_username_exempt_from_warmup():
         )
 
     assert response.status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_create_action_honours_geo_override():
+    """Second of the two ongoing paths the override covers; see the long note on
+    `test_prepare_honours_geo_override_on_every_dispatch` in test_base_task.py for why
+    the wider scope is intentional rather than an oversight.
+
+    Without this branch the same request that succeeds at dispatch is refused at
+    submission, and the account is put to sleep by the very gate its operator already
+    answered.
+    """
+    account = _make_account(phone_country="RU", proxy_country="US", geo_override=True)
+
+    db_result = MagicMock()
+    db_result.scalar_one_or_none.return_value = account
+
+    db = AsyncMock()
+    db.execute.return_value = db_result
+    db.refresh = AsyncMock(side_effect=lambda t: None)
+
+    with patch("arq.create_pool", return_value=AsyncMock()):
+        response = await create_action(request=_make_request(), db=db, api_key="key")
+
+    assert response.status == "queued"
+    assert account.status != AccountStatus.SLEEPING
