@@ -30,6 +30,35 @@ router = APIRouter(prefix="/v1/accounts", tags=["accounts"])
 MAX_ACCOUNTS_PER_API_ID = 200
 
 
+async def _wake_queue(account_id: int, db) -> None:
+    """Start whatever this account already had waiting.
+
+    Returning an account to ACTIVE is only half the job. The per-account FIFO advances
+    from exactly one place — `enqueue_next`, called as a finishing task's post-hook —
+    so an account that fell asleep with work behind it woke up and did nothing: the
+    tasks stayed QUEUED and no code path was going to look at them again. Seen on 28.08:
+    a woken account sat on a full queue until someone enqueued it by hand.
+
+    Failure here is logged, not raised: the account IS active, which is what the caller
+    asked for, and the deferred scheduler will get to the backlog anyway.
+    """
+    from arq import create_pool
+    from arq.connections import RedisSettings
+
+    from app.core.config import get_settings
+    from app.workers.base_task import BaseTask
+
+    try:
+        pool = await create_pool(RedisSettings.from_dsn(get_settings().REDIS_URL))
+    except Exception as e:  # noqa: BLE001 — redis down must not fail the wake-up
+        logger.warning("queue_wake_failed account=%s error=%s", account_id, e)
+        return
+    try:
+        await BaseTask.enqueue_next(account_id, db, pool)
+    finally:
+        await pool.aclose()
+
+
 class FingerprintModel(BaseModel):
     device_model: str
     system_version: str
@@ -365,6 +394,7 @@ async def reactivate_account(
     account.proxy_id = new_proxy.id
     account.status = AccountStatus.ACTIVE
     await db.commit()
+    await _wake_queue(account.id, db)
     return {"account_id": account.id, "status": AccountStatus.ACTIVE, "proxy_country": proxy_country, "geo_status": "OK"}
 
 
@@ -382,4 +412,5 @@ async def unban_account(account_id: int, db: deps.GetDB, api_key: deps.VerifyAPI
     account.status = AccountStatus.ACTIVE
     account.ban_reason = None
     await db.commit()
+    await _wake_queue(account.id, db)
     return {"account_id": account.id, "status": AccountStatus.ACTIVE, "previous_ban_reason": previous}
