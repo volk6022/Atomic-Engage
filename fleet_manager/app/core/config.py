@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     # whole port range again (a real provider outage shouldn't be hammered).
     PROXY_ROTATE_COOLDOWN_SECONDS: int = Field(default=1800)
 
+    # A task whose account cannot run it right now (asleep, banned, geo-critical) used to
+    # stay QUEUED with nothing scheduled to look at it again: recovery picks up EXECUTING
+    # leases and due DEFERRED rows, and enqueue_next only fires from a finishing task, so
+    # a task that never started blocked its account's whole queue silently. Found 28.08 —
+    # one dead proxy stopped every read for that account for three hours, and the caller
+    # saw only the "queued" it got at submit time. Now such a task is deferred with a
+    # deadline, and once it has waited longer than the ceiling it fails for real and says
+    # so on the webhook.
+    TASK_BLOCKED_RETRY_SECONDS: int = Field(default=300)
+    TASK_BLOCKED_MAX_SECONDS: int = Field(default=21600)
+
     def validate(self) -> None:
         if not self.N8N_SYSTEM_WEBHOOK_URL:
             raise RuntimeError(

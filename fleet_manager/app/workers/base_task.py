@@ -393,8 +393,8 @@ async def run_task(
                 task.deferred_until = defer_until
                 await db.commit()
                 return {"deferred_until": defer_until.isoformat()}
-            # banned / sleeping / geo-critical: leave queued (blocked); do not run.
-            return {"blocked": True}
+            # banned / sleeping / geo-critical: the account cannot run this now.
+            return await _defer_or_fail_blocked(db, redis, task, settings)
 
         account = prep["account"]
 
@@ -586,6 +586,55 @@ async def run_task(
 
         finally:
             await BaseTask.enqueue_next(account.id, db, redis)
+
+
+async def _defer_or_fail_blocked(db, redis, task, settings) -> dict:
+    """The account cannot run this task now: park it with a deadline, or bury it.
+
+    Leaving the task QUEUED — what this did until 28.08 — looks harmless and is not.
+    Nothing re-examines a QUEUED task: `recover_orphaned_tasks` wants an expired
+    EXECUTING lease, `reenqueue_due_deferred` wants a due `deferred_until`, and
+    `enqueue_next` only ever runs as a finishing task's post-hook. A task that never
+    started therefore sat at the head of its account's FIFO forever and held every
+    task behind it, while the caller — who was told "queued" at submit time and hears
+    nothing further — had no way to learn that the work would never happen.
+
+    DEFERRED costs nothing extra: the existing scheduler already re-queues due rows.
+    The ceiling is measured from `created_at` rather than a retry counter because
+    `retry_count` belongs to proxy rotation, and because the honest question here is
+    "how long has this been undoable", not "how many times did we look".
+    """
+    waited = (_now() - task.created_at).total_seconds() if task.created_at else 0.0
+    if waited >= settings.TASK_BLOCKED_MAX_SECONDS:
+        task.status = TaskStatus.FAILED
+        task.error_code = "ACCOUNT_BLOCKED"
+        await db.commit()
+        # The caller is told, and the queue moves on to the next account's work.
+        await _webhook(
+            task.webhook_url,
+            {"event": "task_failed", "task_id": task.external_id,
+             "error_code": "ACCOUNT_BLOCKED",
+             "detail": f"account unavailable for {int(waited)}s"},
+            task.id,
+            db,
+        )
+        await BaseTask.enqueue_next(task.account_id, db, redis)
+        logger.warning("task_blocked_expired account=%s task=%s waited=%ss",
+                       task.account_id, task.id, int(waited))
+        return {"error": "account_blocked", "waited_seconds": int(waited)}
+
+    until = _now() + timedelta(seconds=settings.TASK_BLOCKED_RETRY_SECONDS)
+    task.status = TaskStatus.DEFERRED
+    task.deferred_until = until
+    task.error_code = "ACCOUNT_BLOCKED"
+    await db.commit()
+    # Kicking the queue here walks the rest of this account's backlog into DEFERRED too,
+    # one task at a time — and that is the point. A blocked account blocks all of its
+    # work; the alternative is that only the head gets a deadline and everything behind
+    # it stays QUEUED and unexamined, which is the very bug being fixed. The walk is
+    # bounded by the queue length and happens once per block.
+    await BaseTask.enqueue_next(task.account_id, db, redis)
+    return {"blocked": True, "deferred_until": until.isoformat()}
 
 
 async def _rotate_proxy_and_defer(db, redis, task, account, exc) -> dict:
