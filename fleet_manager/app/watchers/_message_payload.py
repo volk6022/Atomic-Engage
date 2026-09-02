@@ -21,6 +21,25 @@ def _text_of(message) -> str:
     return getattr(message, "text", None) or getattr(message, "caption", None) or ""
 
 
+def _channel_origin(message) -> tuple[Optional[int], Optional[int]]:
+    """The channel post this message was auto-relayed from: `(chat_id, message_id)`.
+
+    kurigram exposes this as `forward_origin` (a `MessageOrigin` object), not as a flat
+    `forward_from_message_id` — reading the flat name yields None forever.
+
+    Only the CHANNEL origin is of interest. A comment in a linked discussion group can
+    be linked to on its own, but that link opens the group; without the id of the post
+    in the channel there is no way to offer "open the post this comments on", and a
+    person who is not a member of the group has nowhere useful to land.
+    """
+    origin = getattr(message, "forward_origin", None)
+    kind = getattr(getattr(origin, "type", None), "value", None)
+    if origin is None or kind != "channel":
+        return None, None
+    return (getattr(getattr(origin, "chat", None), "id", None),
+            getattr(origin, "message_id", None))
+
+
 def build_incoming_message_payload(account_id: int, message) -> dict:
     """Map an incoming `Message` to the `incoming_message` webhook body.
 
@@ -53,6 +72,8 @@ def build_incoming_message_payload(account_id: int, message) -> dict:
         or getattr(message, "reply_to_top_message_id", None)
     )
 
+    forward_from_chat_id, forward_from_message_id = _channel_origin(message)
+
     return {
         "event": "incoming_message",
         "account_id": account_id,
@@ -79,4 +100,10 @@ def build_incoming_message_payload(account_id: int, message) -> dict:
         "reply_to_message_id": getattr(message, "reply_to_message_id", None),
         "message_thread_id": message_thread_id,
         "is_automatic_forward": bool(getattr(message, "automatic_forward", False) or False),
+        # The channel post behind an auto-relayed thread root. Mirrored field for field
+        # in `app.workers._read_helpers.build_post`: history and realtime land in one
+        # table downstream, and a field present on only one path is a field the
+        # consumer cannot rely on.
+        "forward_from_chat_id": forward_from_chat_id,
+        "forward_from_message_id": forward_from_message_id,
     }

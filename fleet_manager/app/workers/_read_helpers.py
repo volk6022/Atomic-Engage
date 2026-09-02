@@ -75,6 +75,24 @@ def build_chat_info(chat, *, members_count: Optional[int] = None) -> dict:
     }
 
 
+def _channel_origin(message) -> tuple[Optional[int], Optional[int]]:
+    """The channel post this message was auto-relayed from: `(chat_id, message_id)`.
+
+    kurigram exposes this as `forward_origin` (a `MessageOrigin` object), not as a flat
+    `forward_from_message_id` — reading the flat name yields None forever.
+
+    Mirrors `app.watchers._message_payload._channel_origin` deliberately: history and
+    realtime land in one table downstream, and a field present on only one path is a
+    field the consumer cannot rely on.
+    """
+    origin = getattr(message, "forward_origin", None)
+    kind = getattr(getattr(origin, "type", None), "value", None)
+    if origin is None or kind != "channel":
+        return None, None
+    return (getattr(getattr(origin, "chat", None), "id", None),
+            getattr(origin, "message_id", None))
+
+
 def build_post(message) -> dict:
     """Map a `Message` to the post shape shared by get_chat_history (§3.3, §1 contract).
 
@@ -102,6 +120,8 @@ def build_post(message) -> dict:
         or getattr(reply_to_message, "id", None)
     )
 
+    forward_from_chat_id, forward_from_message_id = _channel_origin(message)
+
     return {
         "message_id": getattr(message, "id", None),
         "date": date.isoformat() if date is not None else None,
@@ -124,6 +144,9 @@ def build_post(message) -> dict:
         "is_automatic_forward": bool(getattr(message, "automatic_forward", False) or False),
         "reply_to_message_id": getattr(message, "reply_to_message_id", None),
         "message_thread_id": message_thread_id,
+        # The channel post behind an auto-relayed thread root — see `_channel_origin`.
+        "forward_from_chat_id": forward_from_chat_id,
+        "forward_from_message_id": forward_from_message_id,
         "edit_date": edit_date.isoformat() if edit_date is not None else None,
         "outgoing": bool(getattr(message, "outgoing", False) or False),
     }
