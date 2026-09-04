@@ -27,6 +27,8 @@ class TaskType(StrEnum):
     GET_CHAT_HISTORY = "get_chat_history"
     GET_CHAT_ADMINS = "get_chat_admins"
     GET_DIALOGS = "get_dialogs"
+    GET_SIMILAR_CHANNELS = "get_similar_channels"
+    SEARCH_PUBLIC_CHATS = "search_public_chats"
 
 
 # Read-only research lookups (docs/research-agent-actions.md §4.1): public-entity
@@ -39,6 +41,8 @@ READ_ACTIONS = frozenset(
         TaskType.GET_CHAT_HISTORY,
         TaskType.GET_CHAT_ADMINS,
         TaskType.GET_DIALOGS,
+        TaskType.GET_SIMILAR_CHANNELS,
+        TaskType.SEARCH_PUBLIC_CHATS,
     }
 )
 

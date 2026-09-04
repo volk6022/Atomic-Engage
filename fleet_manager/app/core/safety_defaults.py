@@ -145,11 +145,17 @@ PREMIUM_CEILINGS = {
 # get_chat_history was raised 80 -> 2000: a live measurement showed ~9000 messages/day
 # in one active discussion group alone; at 80 calls/day x 50 msgs/call, backfilling a
 # single group's past year would have taken two years.
+# Discovery reads (get_similar_channels, search_public_chats) sit at 50: a crawl
+# seeds one call per starting channel, and discovery is bursty by nature — a small
+# ceiling keeps one enrichment run from eating the fleet's daily read budget in an
+# hour. search_public_chat (singular) was removed: it named an action that never
+# existed; the plural action carries this cap instead.
 READ_LIMITS = {
     "resolve_username": 100,
     "get_chat_info": 200,
     "get_chat_history": 2000,
-    "search_public_chat": 50,
+    "get_similar_channels": 50,
+    "search_public_chats": 50,
     "get_chat_admins": 100,
     "get_dialogs": 50,
 }
