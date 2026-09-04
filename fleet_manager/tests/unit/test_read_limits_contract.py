@@ -10,9 +10,13 @@ _EXPECTED = {
     "resolve_username": 100,
     "get_chat_info": 200,
     "get_chat_history": 2000,
-    "search_public_chat": 50,
     "get_chat_admins": 100,
     "get_dialogs": 50,
+    # 05.09.2026: `search_public_chat` в единственном числе был потолком без
+    # действия — воркера с таким именем не существовало никогда. Разведка каналов
+    # добавила два настоящих чтения, и лимит достался тому, кто его тратит.
+    "get_similar_channels": 50,
+    "search_public_chats": 50,
 }
 
 
