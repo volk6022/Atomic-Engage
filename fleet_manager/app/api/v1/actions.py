@@ -97,6 +97,22 @@ class GetDialogsPayload(BaseModel):
     chat_types: Optional[list[str]] = None
 
 
+class GetSimilarChannelsPayload(BaseModel):
+    """Read-only look-alike discovery (§ discovery contract): channels Telegram
+    recommends next to the given channel. Exactly one of username|peer_id."""
+    username: Optional[str] = None
+    peer_id: Optional[int] = None
+
+
+class SearchPublicChatsPayload(BaseModel):
+    """Read-only public-chat search by text query (§ discovery contract). `limit` is
+    capped at 100 — the server clamps contacts.Search there anyway, so a larger
+    value only promises results that never arrive. A blank query is refused by the
+    worker without calling Telegram."""
+    query: str = Field(..., min_length=1)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
 class ActionRequest(BaseModel):
     account_id: int = Field(..., gt=0)
     action: str = Field(
@@ -104,8 +120,9 @@ class ActionRequest(BaseModel):
         description=(
             "Action type: send_message, join_group, react, resolve_username, "
             "invite_to_group, get_chat_info, get_chat_history, get_chat_admins, "
-            "get_dialogs. The last five are read-only research lookups "
-            "(warmup-exempt, read-budget limited)."
+            "get_dialogs, get_similar_channels, search_public_chats. The last "
+            "seven are read-only research lookups (warmup-exempt, read-budget "
+            "limited)."
         ),
     )
     payload: dict = Field(..., description="Action-specific payload")
@@ -137,6 +154,8 @@ async def create_action(
         "get_chat_history",
         "get_chat_admins",
         "get_dialogs",
+        "get_similar_channels",
+        "search_public_chats",
     ]:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
