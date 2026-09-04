@@ -112,7 +112,7 @@ class WorkerSettings:
         # it expires — a sub-minute cadence would add DB load for at most minutes of
         # gain, while a much sparser one would leave freshly-orphaned accounts parked
         # for no reason. run_at_startup=False because on_startup already sweeps on boot.
-        cron(recover_orphaned_tick, minute=range(0, 60, 5), second=0, run_at_startup=False),
+        cron(recover_orphaned_tick, minute=set(range(0, 60, 5)), second=0, run_at_startup=False),
         # Daily warmup driver at 03:00 UTC; also runs once on worker startup so a freshly
         # deployed fleet begins warming its accounts immediately (idempotent / deduped).
         cron(warmup_tick, hour={3}, minute={0}, second={0}, run_at_startup=True),

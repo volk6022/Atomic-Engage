@@ -104,3 +104,24 @@ def test_the_delay_applies_to_the_actions_that_actually_hit_the_ceiling(task_typ
     assert task_type in source, (
         f"{task_type} больше не берёт inter_action_delay — перечитай, какие "
         f"действия упираются в job_timeout, и поправь этот файл")
+
+
+def test_every_cron_schedule_is_actually_computable():
+    """Расписание крона обязано считаться, а не только выглядеть правильно.
+
+    04.09 восстановление осиротевших было поставлено с `minute=range(0, 60, 5)`.
+    Проверка «крон зарегистрирован» это приняла, тесты прошли, образ собрался — а
+    воркер на проде упал на первом же ударе сердца: arq принимает множество или
+    число, но не `range`, и падает уже внутри `calculate_next`. Оба воркера ушли в
+    цикл перезапуска, то есть регистрация крона выключила исполнение задач целиком.
+
+    Поэтому расписание здесь именно ВЫЧИСЛЯЕТСЯ — тем же вызовом, которым его
+    считает arq в `run_cron`.
+    """
+    from datetime import datetime
+
+    now = datetime(2026, 9, 5, 12, 0, 0)
+    for job in WorkerSettings.cron_jobs:
+        job.calculate_next(now)
+        assert job.next_run is not None, (
+            f"расписание {getattr(job, 'name', job)} не вычисляется")
