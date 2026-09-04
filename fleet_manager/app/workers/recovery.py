@@ -1,9 +1,10 @@
 """Restart durability (FR-120) and deferred-task scheduling (FR-105).
 
-* recover_orphaned_tasks: on startup, reset tasks stuck in `executing` beyond the
-  recovery lease back to `queued` so a crashed worker never blocks an account's FIFO
-  queue forever. The lease MUST exceed job_timeout so a genuinely-running task is
-  never reset.
+* recover_orphaned_tasks: on worker startup and on a cron schedule (see
+  recover_orphaned_tick in arq_settings.py), reset tasks stuck in `executing` beyond
+  the recovery lease back to `queued` so a crashed or timed-out worker never blocks an
+  account's FIFO queue forever. The lease MUST exceed job_timeout so a
+  genuinely-running task is never reset.
 * reenqueue_due_deferred: periodically move `deferred` tasks whose `deferred_until`
   has passed back to `queued` and enqueue them (idempotent via a locked transition).
 
@@ -20,7 +21,12 @@ from app.db.models import Task
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LEASE_SECONDS = 600  # > job_timeout (300)
+# MUST stay strictly greater than WorkerSettings.job_timeout (arq_settings.py): a lease
+# below the timeout would re-queue a task that is still legitimately running and send
+# the same Telegram action twice. 900 = 600 (job_timeout) + 300 s of slack (one full
+# inter_action_base_s), so even a ceiling-length job is never falsely recovered while
+# a genuinely orphaned one is re-queued within ~15 min of dying.
+DEFAULT_LEASE_SECONDS = 900
 
 
 def _now() -> datetime:

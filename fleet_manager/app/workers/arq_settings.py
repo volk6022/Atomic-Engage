@@ -61,6 +61,20 @@ async def deferred_scheduler_tick(ctx):
         await reenqueue_due_deferred(db, redis=ctx.get("redis"))
 
 
+async def recover_orphaned_tick(ctx):
+    """Cron job (every 5 min): re-queue tasks stuck in `executing` past the recovery lease.
+
+    on_startup only covers worker boots; a job killed by job_timeout mid-humanizer-pause
+    would otherwise keep its account's FIFO queue frozen until the next deploy/restart
+    (prod, 04.09.2026 — recovery exists for exactly this, but was startup-only).
+    """
+    session_maker = ctx["session_maker"]
+    async with session_maker() as db:
+        recovered = await recover_orphaned_tasks(db, redis=ctx.get("redis"))
+    if recovered:
+        logger.info("recover_orphaned_tick recovered=%s ids=%s", len(recovered), recovered)
+
+
 async def warmup_tick(ctx):
     """Cron job (daily): drive warming accounts forward — advance warmup_day, promote
     tiers when due, and enqueue one warmup action per account per day (US6)."""
@@ -77,7 +91,15 @@ async def warmup_tick(ctx):
 
 class WorkerSettings:
     max_jobs = 10
-    job_timeout = 300
+    # Derived from HumanizerConfig (app/core/humanizer_config.py): join_group and
+    # invite_to_group sleep inter_action_base_s * (1 + inter_action_jitter) =
+    # 300 * 1.40 = 420 s at most before touching Telegram (base_task._humanize_before),
+    # and the contract (tests/unit/test_job_timeout_vs_humanizer.py) requires >= 60 s
+    # on top of that for the proxy connect + the call itself — a hard floor of 480 s.
+    # We take 600 s instead of the bare floor because the 60 s margin is a *minimum*
+    # and mobile proxies routinely eat tens of extra seconds; a job killed mid-pause
+    # is closed by no one and freezes the account's FIFO queue (prod, 04.09.2026).
+    job_timeout = 600
     keep_result = 3600
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
     on_startup = on_startup
@@ -85,6 +107,12 @@ class WorkerSettings:
     functions = FUNCTIONS
     cron_jobs = [
         cron(deferred_scheduler_tick, second={0, 30}, run_at_startup=False),
+        # Orphan sweep every 5 min: the recovery lease (900 s) already bounds how long a
+        # dead task can hold an account's queue, and this tick only trims the tail after
+        # it expires — a sub-minute cadence would add DB load for at most minutes of
+        # gain, while a much sparser one would leave freshly-orphaned accounts parked
+        # for no reason. run_at_startup=False because on_startup already sweeps on boot.
+        cron(recover_orphaned_tick, minute=range(0, 60, 5), second=0, run_at_startup=False),
         # Daily warmup driver at 03:00 UTC; also runs once on worker startup so a freshly
         # deployed fleet begins warming its accounts immediately (idempotent / deduped).
         cron(warmup_tick, hour={3}, minute={0}, second={0}, run_at_startup=True),
