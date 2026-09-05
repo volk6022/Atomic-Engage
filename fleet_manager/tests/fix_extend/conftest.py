@@ -183,12 +183,28 @@ class _FakeArqRedis:
         return True
 
     async def eval(self, script, numkeys, *args):
-        # Emulate the atomic rate-limit Lua (_RATE_LIMIT_LUA): INCR the key and
-        # set EXPIRE on first write. The fake has no real TTL, so we only mirror
-        # the returned counter the production call relies on (FR-350).
-        key = args[0]
-        self.kv[key] = int(self.kv.get(key, 0)) + 1
-        return self.kv[key]
+        # Two Lua scripts live in production and this fake has to answer both, or the
+        # caller silently gets the wrong shape back. `_RATE_LIMIT_LUA` takes one key
+        # and returns the counter (FR-350); `_BUDGET_CONSUME_LUA` takes every budget
+        # that applies to an action and returns `[0, remaining...]` when it consumed
+        # from all of them, or `[i]` naming the 1-based index of the first counter
+        # that refused (FR-340/341/342). A fake that knows only the older script is
+        # not "minimal", it describes a world that no longer exists.
+        keys = list(args[:numkeys])
+        argv = list(args[numkeys:])
+        if "INCR" in script and len(keys) == 1 and len(argv) == 1:
+            key = keys[0]
+            self.kv[key] = int(self.kv.get(key, 0)) + 1
+            return self.kv[key]
+        caps = [int(x) for x in argv[:len(keys)]]
+        for index, (key, cap) in enumerate(zip(keys, caps), start=1):
+            if int(self.kv.get(key, 0)) + 1 > cap:
+                return [index]
+        out = [0]
+        for key, cap in zip(keys, caps):
+            self.kv[key] = int(self.kv.get(key, 0)) + 1
+            out.append(cap - self.kv[key])
+        return out
 
     async def set(self, key, value, *a, **k):
         self.kv[key] = value
