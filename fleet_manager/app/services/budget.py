@@ -93,7 +93,9 @@ async def check_and_consume(
     """Atomically consume one unit of an action's budget if allowed.
 
     Checks per-account first, then the api_id and /24 aggregate budgets for sensitive
-    actions; consumes from every applicable counter only when ALL have headroom.
+    actions; consumes from every applicable counter only when ALL have headroom — in
+    one atomic step, because the check and the consume being separate is precisely how
+    the aggregate cap was pierced under concurrency.
     """
     from app.db import redis_client as rc
 
@@ -101,30 +103,35 @@ async def check_and_consume(
     if cap <= 0:
         return BudgetDecision(allowed=False, binding="per_account", reason="action_not_allowed")
 
-    # Per-account (peek without committing by computing remaining from current count).
-    acct_key = f"budget:acct:{account_id}:{action}"
-    acct_count = await rc.rate_limit_peek(redis, acct_key)
-    per_account_remaining = cap - acct_count
-
-    aggregate_remaining: Optional[int] = None
-    agg_keys: list[tuple[str, int]] = []
+    # Order matters: the per-account budget comes first, so the script's refusal index
+    # maps back onto the caller's vocabulary without a second lookup.
+    budgets: list[tuple[str, int]] = [
+        (f"budget:acct:{account_id}:{action}", cap)]
     if action in SENSITIVE_ACTIONS:
-        api_cap = _aggregate_cap(cap_profile, use_case, action, api_id_member_count)
-        subnet_cap = _aggregate_cap(cap_profile, use_case, action, subnet_member_count)
-        api_key = f"budget:api:{api_id}:{action}"
-        subnet_key = f"budget:net:{proxy_subnet}:{action}"
-        api_rem = api_cap - await rc.rate_limit_peek(redis, api_key)
-        subnet_rem = subnet_cap - await rc.rate_limit_peek(redis, subnet_key)
-        aggregate_remaining = min(api_rem, subnet_rem)
-        agg_keys = [(api_key, api_cap), (subnet_key, subnet_cap)]
+        budgets.append((f"budget:api:{api_id}:{action}",
+                        _aggregate_cap(cap_profile, use_case, action,
+                                       api_id_member_count)))
+        budgets.append((f"budget:net:{proxy_subnet}:{action}",
+                        _aggregate_cap(cap_profile, use_case, action,
+                                       subnet_member_count)))
 
-    decision = decide(per_account_remaining, aggregate_remaining)
-    if not decision.allowed:
-        return decision
+    # One atomic step for the whole decision. Reading the counters first and deciding
+    # in Python was correct per increment and wrong as a decision: concurrent workers
+    # read the same value and both spent it, which is how the fleet's join counter
+    # reached 10 against a cap of 9 on 2026-09-05.
+    refused_at, remaining = await rc.budget_consume(redis, budgets, ttl=ttl_base,
+                                                    clock=clock)
+    if refused_at:
+        if refused_at == 1:
+            return BudgetDecision(allowed=False, binding="per_account",
+                                  reason="account_cap")
+        return BudgetDecision(allowed=False, binding="aggregate",
+                              reason="aggregate_cap")
 
-    # Consume from the per-account counter and every applicable aggregate counter.
-    # Each increment is atomic (INCR+EXPIRE) and Clock-scaled (FR-350/301).
-    await rc.rate_limit_increment(redis, acct_key, ttl=ttl_base, clock=clock)
-    for key, _cap in agg_keys:
-        await rc.rate_limit_increment(redis, key, ttl=ttl_base, clock=clock)
-    return decision
+    # Which budget is closest to binding is reported even on success: the caller
+    # schedules around it, and "allowed, but the fleet has one left" is a different
+    # fact from "allowed, and only this account is near its cap".
+    per_account_remaining = remaining[0]
+    aggregate_remaining = min(remaining[1:]) if len(remaining) > 1 else None
+    return decide(per_account_remaining + 1, 
+                  None if aggregate_remaining is None else aggregate_remaining + 1)

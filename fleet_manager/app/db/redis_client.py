@@ -45,6 +45,61 @@ return c
 """
 
 
+# All-or-nothing check-and-consume across every budget that applies to one action
+# (FR-340/341/342). The old shape read each counter with GET, decided in Python, then
+# incremented — atomic per increment, but not as a decision: two workers on different
+# accounts read the same aggregate value, both saw headroom, and both spent it. The
+# overshoot equals the number of concurrent workers, and on 2026-09-05 the fleet's
+# join counter stood at 10 against a cap of 9 for exactly that reason.
+#
+# Two properties the script has to hold and the old shape could not:
+#   * nothing is spent unless EVERY counter has headroom — a partial consume would
+#     burn an account's daily budget on an action it never performed;
+#   * every counter that gets its first increment also gets its expiry, in the same
+#     atomic step (the FR-350 rule that made the plain increment a script already).
+#
+# Returns {0, remaining...} when consumed, or {i} where i is the 1-based index of the
+# first counter that refused — the caller maps index 1 to the per-account budget and
+# anything beyond it to an aggregate one.
+_BUDGET_CONSUME_LUA = """
+local n = #KEYS
+local ttl = tonumber(ARGV[n + 1])
+for i = 1, n do
+  local cur = tonumber(redis.call('GET', KEYS[i]) or '0')
+  if cur + 1 > tonumber(ARGV[i]) then
+    return {i}
+  end
+end
+local out = {0}
+for i = 1, n do
+  local c = redis.call('INCR', KEYS[i])
+  if c == 1 then
+    redis.call('EXPIRE', KEYS[i], ttl)
+  end
+  out[#out + 1] = tonumber(ARGV[i]) - c
+end
+return out
+"""
+
+
+async def budget_consume(
+    redis_client: redis.Redis, budgets: list[tuple[str, int]], ttl: int = 86400,
+    clock=None,
+) -> tuple[int, list[int]]:
+    """Consume one unit from every budget at once, or from none of them.
+
+    `budgets` is ordered `[(key, cap), ...]` with the per-account budget first, so the
+    refusal index maps straight back onto the caller's own vocabulary.
+    """
+    full_keys = [f"rate:{key}" for key, _cap in budgets]
+    caps = [str(cap) for _key, cap in budgets]
+    effective_ttl = clock.scaled_ttl(ttl) if clock is not None else ttl
+    result = await redis_client.eval(
+        _BUDGET_CONSUME_LUA, len(full_keys), *full_keys, *caps, str(effective_ttl))
+    values = [int(x) for x in result]
+    return values[0], values[1:]
+
+
 async def rate_limit_increment(
     redis_client: redis.Redis, key: str, ttl: int = 86400, clock=None
 ) -> int:

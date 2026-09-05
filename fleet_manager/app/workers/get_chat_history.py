@@ -42,6 +42,29 @@ def _parse_iso(raw):
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def _reached_min_date(mdate, min_date) -> bool:
+    """Whether this post is already older than the requested window boundary.
+
+    A named helper rather than an inline comparison because the inline one was
+    unreachable from any test and shipped broken: kurigram returns `Message.date`
+    **naive** (UTC), `_parse_iso` returns it **aware**, and comparing that pair
+    raises `TypeError` on the first message of the first page. `min_date` was
+    declared, documented and dead for as long as the action has existed — found
+    live on 2026-09-05 by Radar's first automatic backfill, and invisible until
+    then because nobody had ever passed the parameter.
+
+    Naive dates are read as UTC: that is what Telegram hands over, and guessing a
+    local zone here would silently shift every boundary by hours.
+
+    The boundary itself is kept — "the last month" means the month.
+    """
+    if min_date is None or mdate is None:
+        return False
+    if mdate.tzinfo is None:
+        mdate = mdate.replace(tzinfo=timezone.utc)
+    return mdate < min_date
+
+
 def _effective_max_id(payload: dict, task_id: int) -> int:
     """Resolve the backward-paging cursor: `max_id` wins when both are set; a legacy
     `offset_id` is translated into `max_id` (with a warning) rather than forwarded to
@@ -77,8 +100,7 @@ async def get_chat_history(ctx, task_id: int) -> dict:
                 async for m in client.get_chat_history(chat_id, **history_kwargs):
                     # History is newest-first; max_id/min_id are already applied by
                     # kurigram itself, only the min_date cursor needs an early exit.
-                    mdate = getattr(m, "date", None)
-                    if min_date and mdate is not None and mdate < min_date:
+                    if _reached_min_date(getattr(m, "date", None), min_date):
                         break
                     posts.append(build_post(m))
             except tg.NOT_FOUND_ERRORS as e:
