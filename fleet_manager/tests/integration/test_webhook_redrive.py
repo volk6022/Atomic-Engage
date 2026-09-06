@@ -310,3 +310,31 @@ def test_the_redrive_schedule_actually_computes():
     moment = datetime(2026, 9, 6, 12, 0, 0)
     job.calculate_next(moment)
     assert job.next_run is not None
+
+
+@pytest.mark.asyncio
+async def test_the_tick_body_actually_runs(session_maker, clean_deliveries):
+    """Крон обязан ИСПОЛНЯТЬСЯ, а не только существовать и вычисляться.
+
+    Первая выкатка 06.09 уехала на прод с зарегистрированным кроном и без импорта
+    `redrive_pending_webhooks` в модуле настроек: воркер поднялся, отрапортовал
+    17 функций, и каждый удар сердца падал `NameError`. Ни один тест этого не
+    заметил — они звали функцию напрямую из её модуля, а про тик спрашивали только
+    «зарегистрирован ли» и «считается ли расписание».
+
+    Поэтому здесь тик зовётся ровно так, как его зовёт arq: с `ctx`.
+    """
+    from app.workers import arq_settings
+    from app.workers.webhook_redrive import REDRIVE_AFTER_SECONDS
+
+    await clean_deliveries()
+    stranded = await _add(session_maker,
+                          created_at=datetime.now(timezone.utc)
+                          - timedelta(seconds=REDRIVE_AFTER_SECONDS + 60))
+    pool = _FakePool()
+
+    await arq_settings.webhook_redrive_tick({"session_maker": session_maker,
+                                             "redis": pool})
+
+    assert pool.jobs, "тик не поставил застрявшую доставку"
+    assert pool.jobs[0][1][0] == stranded

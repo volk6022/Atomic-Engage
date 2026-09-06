@@ -19,6 +19,7 @@ from app.workers.get_similar_channels import get_similar_channels
 from app.workers.search_public_chats import search_public_chats
 from app.workers.deliver_webhook import deliver_webhook
 from app.workers.recovery import recover_orphaned_tasks, reenqueue_due_deferred
+from app.workers.webhook_redrive import redrive_pending_webhooks
 
 logger = logging.getLogger(__name__)
 
