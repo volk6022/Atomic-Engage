@@ -15,7 +15,7 @@ inline instead of calling `run_health_check_loop`, so it never exercised any of 
 These tests drive the real loop.
 """
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.constants import AccountStatus
 from app.db.models import Account, Proxy, TelemetryEvent
@@ -123,25 +123,79 @@ async def test_sleeping_records_why_it_happened(
     assert f"strikes={PROXY_FAIL_STRIKES}" in events[0].cause
 
 
+async def _drop_proxy_uniqueness(session_maker) -> None:
+    """Remove whatever enforces one-proxy-one-account, by either of its names."""
+    async with session_maker() as s:
+        names = (await s.execute(text(
+            "select conname from pg_constraint c "
+            "join pg_class t on t.oid = c.conrelid "
+            "where t.relname = 'accounts' and c.contype = 'u' "
+            "and pg_get_constraintdef(c.oid) ilike '%(proxy_id)%'"))).scalars().all()
+        for name in names:
+            await s.execute(text(f'ALTER TABLE accounts DROP CONSTRAINT "{name}"'))
+        indexes = (await s.execute(text(
+            "select indexname from pg_indexes where tablename = 'accounts' "
+            "and indexdef ilike '%unique%' and indexdef ilike '%(proxy_id)%'"))).scalars().all()
+        for name in indexes:
+            await s.execute(text(f'DROP INDEX IF EXISTS "{name}"'))
+        await s.commit()
+
+
+async def _restore_proxy_uniqueness(session_maker) -> None:
+    async with session_maker() as s:
+        await s.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_accounts_proxy_id "
+            "ON accounts (proxy_id)"))
+        await s.commit()
+
+
 @pytest.mark.asyncio
 async def test_a_shared_proxy_row_does_not_kill_the_loop(
     account_factory, session_maker, redis_client, monkeypatch
 ):
     """Two accounts on one proxy row. `scalar_one_or_none` raised here and took the
-    whole fleet's health checking down with it."""
+    whole fleet's health checking down with it.
+
+    Since 06.09 the schema forbids that state (`uq_accounts_proxy_id`, plan 3.4), so
+    the index is lifted for the length of this test — deliberately, and this is not a
+    workaround. The constraint is brand new and, because Engage never runs its
+    migrations on a live database (there is no `alembic_version` on prod), it reaches
+    an existing tenant only when someone types the `CREATE UNIQUE INDEX` by hand. A
+    tenant provisioned without that step still has the old schema, and the health loop
+    must survive it there. The defence is what keeps a single bad row from taking the
+    fleet's health checking down; removing its proof because the door is now locked
+    would leave the code unproven exactly where the lock is missing.
+    """
     a = await account_factory(status="active")
     b = await account_factory(status="active")
-    async with session_maker() as s:
-        acc = (await s.execute(
-            select(Account).where(Account.id == b["account_id"]))).scalar_one()
-        acc.proxy_id = a["proxy_id"]
-        await s.commit()
+    # The rule reaches a database under two different names, and both must be lifted:
+    # migration 0006 creates the index `uq_accounts_proxy_id`, while a database built
+    # from the ORM metadata (which is what `0001_initial` does, and therefore what a
+    # fresh test database is) gets a UNIQUE *constraint* named `accounts_proxy_id_key`.
+    # Dropping only the one you wrote yourself leaves the other in place, and the
+    # INSERT still fails — which is exactly what happened when this was first written.
+    await _drop_proxy_uniqueness(session_maker)
+    try:
+        async with session_maker() as s:
+            acc = (await s.execute(
+                select(Account).where(Account.id == b["account_id"]))).scalar_one()
+            acc.proxy_id = a["proxy_id"]
+            await s.commit()
 
-    await _run_cycles(monkeypatch, session_maker, redis_client,
-                      results=[False] * PROXY_FAIL_STRIKES)
+        await _run_cycles(monkeypatch, session_maker, redis_client,
+                          results=[False] * PROXY_FAIL_STRIKES)
 
-    assert await _status(session_maker, a["account_id"]) == AccountStatus.SLEEPING
-    assert await _status(session_maker, b["account_id"]) == AccountStatus.SLEEPING
+        assert await _status(session_maker, a["account_id"]) == AccountStatus.SLEEPING
+        assert await _status(session_maker, b["account_id"]) == AccountStatus.SLEEPING
+    finally:
+        # Undo the shared row first: the index cannot be rebuilt over a duplicate, and
+        # a silently missing index would weaken every test that runs after this one.
+        async with session_maker() as s:
+            acc = (await s.execute(
+                select(Account).where(Account.id == b["account_id"]))).scalar_one()
+            acc.proxy_id = b["proxy_id"]
+            await s.commit()
+        await _restore_proxy_uniqueness(session_maker)
 
 
 def test_the_strike_count_is_worth_more_than_one_check():
