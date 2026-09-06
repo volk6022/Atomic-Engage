@@ -79,6 +79,21 @@ async def recover_orphaned_tick(ctx):
         logger.info("recover_orphaned_tick recovered=%s ids=%s", len(recovered), recovered)
 
 
+async def webhook_redrive_tick(ctx):
+    """Cron job (every 5 min): re-queue webhook deliveries stranded in `pending`.
+
+    `enqueue_webhook` promised that a row left behind by a queue outage "can be
+    re-driven later"; until this tick existed, nobody re-drove it. One Redis blip
+    therefore stopped delivery for the life of the process, and the fleet looked
+    healthy the whole time — the shape of the 18.08 outage.
+    """
+    session_maker = ctx["session_maker"]
+    async with session_maker() as db:
+        driven = await redrive_pending_webhooks(db, redis=ctx.get("redis"))
+    if driven:
+        logger.warning("webhook_redrive_tick driven=%s ids=%s", len(driven), driven)
+
+
 async def warmup_tick(ctx):
     """Cron job (daily): drive warming accounts forward — advance warmup_day, promote
     tiers when due, and enqueue one warmup action per account per day (US6)."""
@@ -117,6 +132,13 @@ class WorkerSettings:
         # gain, while a much sparser one would leave freshly-orphaned accounts parked
         # for no reason. run_at_startup=False because on_startup already sweeps on boot.
         cron(recover_orphaned_tick, minute=set(range(0, 60, 5)), second=0, run_at_startup=False),
+        # Webhook re-drive on the same 5-min cadence but offset by 30 s: both sweeps
+        # scan for "silent too long", and running them in the same second would put two
+        # table scans on the same tick for no reason. run_at_startup=True because a
+        # process that just came back is exactly the one whose predecessor may have died
+        # holding undelivered rows.
+        cron(webhook_redrive_tick, minute=set(range(0, 60, 5)), second=30,
+             run_at_startup=True),
         # Daily warmup driver at 03:00 UTC; also runs once on worker startup so a freshly
         # deployed fleet begins warming its accounts immediately (idempotent / deduped).
         cron(warmup_tick, hour={3}, minute={0}, second={0}, run_at_startup=True),
