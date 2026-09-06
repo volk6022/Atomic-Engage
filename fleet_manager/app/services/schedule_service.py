@@ -52,9 +52,29 @@ class WeeklySchedule:
         return self.end_hour * 60 + self.end_minute
 
 
-def _proxy_tz_offset(account) -> int:
+def proxy_tz_offset(account) -> int:
+    """Seconds to add to UTC to get the account's local time, per its proxy exit.
+
+    Public because it is the ONLY correct answer to that question and there used to be
+    two. `working_hours._flat_check` asked it as
+    `account.proxy.tz_offset if hasattr(account, "proxy") else 0`, which is not a guard
+    at all: on a SQLAlchemy model the relationship attribute always exists, so the
+    `else` branch is unreachable and a NULL `proxy_id` — an explicitly supported mode,
+    "run on the host's own IP" — raised `AttributeError` instead of falling back. One
+    reader defaulted to UTC, the other crashed, on the same account.
+
+    The offset itself comes from GeoIP on the proxy HOST (`geo_match.get_proxy_info`),
+    i.e. the provider's gateway, not the exit the traffic actually leaves from. On the
+    live fleet that reads -18000 (US Eastern) for accounts working Russian hours; it is
+    harmless only because every account currently runs `work_start=0, work_end=24`.
+    """
     proxy = getattr(account, "proxy", None)
     return getattr(proxy, "tz_offset", 0) or 0
+
+
+# Private alias: this module's own call sites read better unprefixed, and renaming them
+# all would bury the actual change in noise.
+_proxy_tz_offset = proxy_tz_offset
 
 
 def _account_window(account):

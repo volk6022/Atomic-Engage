@@ -32,9 +32,16 @@ class WorkingHoursGuard:
     def _flat_check(
         self, account, now_utc: datetime
     ) -> tuple[bool, Optional[datetime]]:
-        proxy_tz_offset = account.proxy.tz_offset if hasattr(account, "proxy") else 0
+        # One reader for one question. The inline version here
+        # (`account.proxy.tz_offset if hasattr(account, "proxy") else 0`) looked like a
+        # guard and was not: `hasattr` on a SQLAlchemy model is always true, so a NULL
+        # proxy — the supported "run on the host's own IP" mode — raised AttributeError
+        # while the schedule path silently used UTC for the same account.
+        from app.services.schedule_service import proxy_tz_offset
+
         local_hour = (
-            now_utc.hour * 3600 + now_utc.minute * 60 + now_utc.second + proxy_tz_offset
+            now_utc.hour * 3600 + now_utc.minute * 60 + now_utc.second
+            + proxy_tz_offset(account)
         ) // 3600
         local_hour = local_hour % 24
 
