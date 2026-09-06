@@ -40,8 +40,10 @@ class Account(Base):
     # Nullable: a NULL proxy means "run on the host's own IP" (an intentional mode for
     # a residential-IP box whose reputation beats the proxy pool). The worker path
     # already tolerates account.proxy is None across geo/ASN/rotation gates.
+    # UNIQUE (migration 0006): one proxy belongs to exactly one account. NULLs stay
+    # shared — Postgres treats them as distinct, which is exactly the rule wanted here.
     proxy_id: Mapped[Optional[int]] = mapped_column(
-        BigInteger, ForeignKey("proxies.id"), nullable=True
+        BigInteger, ForeignKey("proxies.id"), nullable=True, unique=True
     )
     device_model: Mapped[str] = mapped_column(String(100), nullable=False)
     system_version: Mapped[str] = mapped_column(String(20), nullable=False)
