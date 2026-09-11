@@ -108,7 +108,10 @@ async def check_and_consume(
     budgets: list[tuple[str, int]] = [
         (f"budget:acct:{account_id}:{action}", cap)]
     if action in SENSITIVE_ACTIONS:
-        budgets.append((f"budget:api:{api_id}:{action}",
+        # The api_id aggregate is scoped per use_case (E6): accounts on one api_id
+        # running different use_cases must not share a counter whose cap is
+        # recomputed from whichever use_case happened to be calling.
+        budgets.append((f"budget:api:{api_id}:{use_case}:{action}",
                         _aggregate_cap(cap_profile, use_case, action,
                                        api_id_member_count)))
         budgets.append((f"budget:net:{proxy_subnet}:{action}",

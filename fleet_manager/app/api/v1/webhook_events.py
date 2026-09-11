@@ -40,6 +40,21 @@ class FloodWaitEvent(BaseModel):
     retry_in: int
 
 
+class TaskDeferredEvent(BaseModel):
+    """Emitted by the budget-deferral branches in `base_task.run_task` (E4).
+
+    Must mirror the actual envelope verbatim: `error_code` is
+    READ_BUDGET_EXCEEDED | BUDGET_PER_ACCOUNT | BUDGET_AGGREGATE, and
+    `deferred_until` is the same instant written to `task.deferred_until`.
+    """
+
+    event: Literal["task_deferred"] = "task_deferred"
+    task_id: str
+    account_id: int
+    error_code: str
+    deferred_until: str
+
+
 class ProxyFailSleepingEvent(BaseModel):
     event: Literal["proxy_fail_sleeping"] = "proxy_fail_sleeping"
     account_id: int

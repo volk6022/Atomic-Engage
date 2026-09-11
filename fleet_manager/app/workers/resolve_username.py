@@ -69,4 +69,5 @@ async def resolve_username(ctx, task_id: int) -> dict:
         if redis is not None:
             await peer_cache_set(redis, payload["username"], result["peer_id"])
 
-    return await run_task(ctx, task_id, builder, post_process=post_process)
+    return await run_task(ctx, task_id, builder, post_process=post_process,
+                          read_action="resolve_username")

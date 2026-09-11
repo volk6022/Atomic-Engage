@@ -35,6 +35,7 @@ dev = [
     "pytest-cov>=6.0.0",
     "factory-boy",
     "respx>=0.22.0",
+    "aiosqlite>=0.20.0",
 ]
 # Only needed by scripts/tdata_to_session.py (Telegram Desktop tdata -> session string).
 # Heavy GUI deps that aren't used by the runtime, so they're opt-in for deploy:

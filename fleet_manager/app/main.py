@@ -12,6 +12,7 @@ from app.api.v1 import (
     api_credentials,
     admin,
     tasks,
+    limits,
 )
 
 
@@ -101,6 +102,7 @@ def create_app() -> FastAPI:
     app.include_router(proxies.router)
     app.include_router(api_credentials.router)
     app.include_router(admin.router)
+    app.include_router(limits.router)
 
     return app
 

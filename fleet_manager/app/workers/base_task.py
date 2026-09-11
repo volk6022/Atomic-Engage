@@ -416,6 +416,21 @@ async def run_task(
             task.deferred_until = until
             task.error_code = "READ_BUDGET_EXCEEDED"
             await db.commit()
+            # E4: the requester owns the deferral — whoever passed webhook_url (and
+            # the system webhook when none was given) must learn the task slipped on
+            # budget, same envelope shape as the flood_wait event below.
+            await _webhook(
+                task.webhook_url or settings.N8N_SYSTEM_WEBHOOK_URL,
+                {
+                    "event": "task_deferred",
+                    "task_id": task.external_id,
+                    "account_id": account.id,
+                    "error_code": task.error_code,
+                    "deferred_until": until.isoformat(),
+                },
+                task.id,
+                db,
+            )
             await BaseTask.enqueue_next(account.id, db, redis)
             return {"rate_limited": True, "deferred_until": until.isoformat()}
 
@@ -440,6 +455,22 @@ async def run_task(
                     warmup_params=_warmup_snapshot(account),
                 )
                 await db.commit()
+                # E4: same task_deferred notification as the read-budget branch —
+                # the customer's own webhook_url first, the system webhook only as
+                # fallback. error_code already carries the binding (BUDGET_PER_ACCOUNT
+                # / BUDGET_AGGREGATE); the envelope reads it back from the task.
+                await _webhook(
+                    task.webhook_url or settings.N8N_SYSTEM_WEBHOOK_URL,
+                    {
+                        "event": "task_deferred",
+                        "task_id": task.external_id,
+                        "account_id": account.id,
+                        "error_code": task.error_code,
+                        "deferred_until": until.isoformat(),
+                    },
+                    task.id,
+                    db,
+                )
                 await BaseTask.enqueue_next(account.id, db, redis)
                 return {
                     "rate_limited": True,

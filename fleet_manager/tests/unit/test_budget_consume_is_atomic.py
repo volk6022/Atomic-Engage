@@ -140,8 +140,8 @@ def test_aggregate_cap_holds_against_concurrent_accounts(caps):
     allowed = [r for r in results if r.allowed]
     assert len(allowed) == 9, (
         f"пропущено {len(allowed)} при потолке 9 — совокупный бюджет пробит")
-    assert redis.store["rate:budget:api:2040:joins_per_day"] == 9, (
-        f"счётчик {redis.store['rate:budget:api:2040:joins_per_day']} при потолке 9")
+    assert redis.store["rate:budget:api:2040:public_reply:joins_per_day"] == 9, (
+        f"счётчик {redis.store['rate:budget:api:2040:public_reply:joins_per_day']} при потолке 9")
     assert all(r.binding == "aggregate" for r in results if not r.allowed)
 
 
@@ -211,4 +211,4 @@ def test_reads_are_not_aggregate_budgeted(caps, monkeypatch):
     decision = asyncio.run(go())
 
     assert decision.allowed is True
-    assert "rate:budget:api:2040:get_chat_history" not in redis.store
+    assert "rate:budget:api:2040:public_reply:get_chat_history" not in redis.store

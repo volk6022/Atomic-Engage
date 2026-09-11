@@ -120,6 +120,40 @@ async def rate_limit_peek(redis_client: redis.Redis, key: str) -> int:
     return int(raw) if raw else 0
 
 
+async def rate_limit_peek_many(
+    redis_client: redis.Redis, keys: list[str]
+) -> list[tuple[int, Optional[int]]]:
+    """(value, ttl) for each ``rate:{key}`` without mutating it; no key → (0, None).
+
+    Batch twin of :func:`rate_limit_peek` for the limits dashboard (E1): the whole
+    snapshot goes out as ONE pipeline (GET for every key, then TTL for every key —
+    two round-trips regardless of fleet size), so an N-account × 11-action poll costs
+    O(1) round-trips instead of O(N·M). Strictly peek-semantics — no INCR/EXPIRE from
+    here, ever: asking "how much is left" must not spend the budget it asks about.
+    The ttl element is the key's remaining seconds (the sliding window from its first
+    INCR, Clock-scaled in the write path); a missing key (Redis TTL −2) — and, for
+    symmetry, a key without expiry (TTL −1) — reports ``None``, i.e. "no reset to
+    count down to".
+    """
+    if not keys:
+        return []
+    full_keys = [f"rate:{key}" for key in keys]
+    pipe = redis_client.pipeline(transaction=False)
+    for full_key in full_keys:
+        pipe.get(full_key)
+    for full_key in full_keys:
+        pipe.ttl(full_key)
+    results = await pipe.execute()
+    half = len(full_keys)
+    out: list[tuple[int, Optional[int]]] = []
+    for i in range(half):
+        raw = results[i]
+        ttl = results[half + i]
+        value = int(raw) if raw else 0
+        out.append((value, int(ttl) if isinstance(ttl, int) and ttl >= 0 else None))
+    return out
+
+
 async def chat_info_cache_get(
     redis_client: redis.Redis, username: str
 ) -> Optional[dict]:
