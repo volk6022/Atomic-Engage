@@ -604,8 +604,45 @@ async def run_task(
             return await _rotate_proxy_and_defer(db, redis, task, account, e)
 
         except Exception as e:  # noqa: BLE001 — last-resort failure path
+            # Task 3.3: split what fell through the named branches. A programmer
+            # mistake (PROGRAMMER_ERROR) is logged at ERROR with the stack trace and
+            # gets a telemetry event — retry cannot help, the same code fails the
+            # same way again. An unknown kurigram rejection (TG_RPC) is a WARNING.
+            # Anything else keeps the previous behaviour: error_code = exception
+            # class name. No existing code is renamed; FAILED stays terminal for
+            # all three classes.
+            error_code, log_level = tg.classify_exception(e)
             task.status = TaskStatus.FAILED
-            task.error_code = type(e).__name__
+            task.error_code = error_code
+            # The exception class and text belong in task.result (Radar's
+            # TaskFailedEvent webhook contract is unchanged); keep whatever the
+            # success path had already put there and add the error fields on top.
+            prior = task.result if isinstance(task.result, dict) else {}
+            task.result = {
+                **prior,
+                "error": str(e),
+                "error_class": type(e).__name__,
+            }
+            if log_level == "error":
+                logger.error(
+                    "task_failed account=%s task=%s type=%s code=%s: %s",
+                    account.id, task.id, type(e).__name__, error_code, e,
+                    exc_info=True,
+                )
+                await telemetry.record_for_account(
+                    db, account,
+                    event_type=telemetry.PROGRAMMER_ERROR,
+                    action_type=task.task_type,
+                    target_kind=TARGET_KIND.get(task.task_type),
+                    cause=type(e).__name__,
+                    outcome="failed",
+                    warmup_params=_warmup_snapshot(account),
+                )
+            else:
+                logger.warning(
+                    "task_failed account=%s task=%s type=%s code=%s: %s",
+                    account.id, task.id, type(e).__name__, error_code, e,
+                )
             await db.commit()
             await _webhook(
                 task.webhook_url,

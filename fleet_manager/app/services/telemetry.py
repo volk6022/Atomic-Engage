@@ -24,6 +24,7 @@ BANNED = "banned"
 ACTION = "action"
 SURVIVAL_TICK = "survival_tick"
 PROXY_ROTATE = "proxy_rotate"
+PROGRAMMER_ERROR = "programmer_error"  # task 3.3: run_task caught a bug in our code
 
 
 async def record(
